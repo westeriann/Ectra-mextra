@@ -329,7 +329,7 @@ describe('music analysis', () => {
 
   it('auto-program places calm cues in quiet bars and intense cues in loud bars', () => {
     const show = newShow('club');
-    const a = { bpm: 120, offset: 0, duration: 64, peaks: new Float32Array(), barEnergy: [0.05, 0.05, 0.05, 0.05, 1, 1, 1, 1], accents: [8] };
+    const a = { bpm: 120, offset: 0, duration: 64, peaks: new Float32Array(), barEnergy: [0.05, 0.05, 0.05, 0.05, 1, 1, 1, 1], accents: [8], barBrightness: [], barBusy: [] };
     const res = autoProgram(show, a, { barsPerCue: 4, accents: true });
     expect(res.cues).toHaveLength(2);
     expect(res.cues[1].time).toBe(8);
@@ -442,5 +442,86 @@ describe('beam tracing', () => {
     for (const s of segs.slice(1)) expect(s.dir[2]).toBeLessThan(0.99);
     const limited = traceBeam(scene, [0, 5, 0], [0, 0, 1], { ...opts(3), maxDepth: 1 });
     expect(limited).toHaveLength(3);
+  });
+});
+
+describe('song to show', () => {
+  // A synthetic 64-bar song: quiet intro, groove, build, drop, breakdown, drop, outro.
+  const shape = [...Array(8).fill(0.2), ...Array(16).fill(0.55), ...Array(8).fill(0.62), ...Array(16).fill(1), ...Array(8).fill(0.3), ...Array(8).fill(0.95)];
+  const analysis = (energy = shape) => ({
+    bpm: 128,
+    offset: 0,
+    duration: energy.length * (60 / 128) * 4,
+    peaks: new Float32Array(),
+    barEnergy: energy,
+    accents: [],
+    barBrightness: energy.map((_, i) => (i % 7) / 7),
+    barBusy: energy.map((e) => e),
+  });
+  const music = (a: ReturnType<typeof analysis>) => ({ name: 's', duration: a.duration, bpm: a.bpm, offset: 0, beatsPerBar: 4 });
+
+  it('maps a song into labelled sections', async () => {
+    const { mapSong } = await import('../src/core/generate');
+    const a = analysis();
+    const kinds = mapSong(a, music(a)).map((s) => s.kind);
+    expect(kinds[0]).toBe('intro');
+    expect(kinds).toContain('build');
+    expect(kinds.filter((k) => k === 'drop').length).toBeGreaterThanOrEqual(2);
+    expect(kinds).toContain('breakdown');
+    // Every build is followed by a drop.
+    kinds.forEach((k, i) => k === 'build' && expect(kinds[i + 1]).toBe('drop'));
+  });
+
+  it('designs new cues for every laser, with hits and automation around the drops', async () => {
+    const { generateShow, mapSong } = await import('../src/core/generate');
+    const show = newShow('arena');
+    const a = analysis();
+    const g = generateShow(show, a, music(a), { vibe: 'energetic', variation: 0, barsPerVariation: 8 });
+    expect(g.cues.length).toBeGreaterThan(4);
+    for (const cue of g.cues) {
+      expect(cue.auto).toBe(true);
+      expect(Object.keys(cue.looks).sort()).toEqual(show.fixtures.map((f) => f.id).sort());
+    }
+    const times = g.timeline.cues.map((t) => t.time);
+    expect([...times].sort((x, y) => x - y)).toEqual(times);
+    expect(times[0]).toBe(0);
+    const drops = mapSong(a, music(a)).filter((s) => s.kind === 'drop' && s.start > 0);
+    for (const d of drops) {
+      expect(g.timeline.hits.some((h) => h.kind === 'flash' && Math.abs(h.time - d.start) < 1e-6)).toBe(true);
+      expect(g.timeline.hits.some((h) => h.kind === 'blackout' && h.time < d.start && h.time + h.duration <= d.start + 1e-6)).toBe(true);
+    }
+    expect(g.timeline.lanes.find((l) => l.param === 'intensity')!.points.length).toBeGreaterThan(3);
+    // Groups get different looks (the rig has depth).
+    const first = g.cues[0];
+    const kinds = new Set(show.fixtures.map((f) => first.looks[f.id].effect.kind + first.looks[f.id].effect.color));
+    expect(kinds.size).toBeGreaterThan(1);
+  });
+
+  it('is repeatable per song, and remixes differ', async () => {
+    const { generateShow } = await import('../src/core/generate');
+    const show = newShow('club');
+    const a = analysis();
+    const sig = (v: number) => generateShow(show, a, music(a), { vibe: 'auto', variation: v, barsPerVariation: 8 }).cues.map((c) => c.name + Object.values(c.looks)[0].effect.color).join('|');
+    expect(sig(0)).toBe(sig(0));
+    expect(sig(1)).not.toBe(sig(0));
+    const other = analysis(shape.map((e, i) => (i < 20 ? e * 0.9 : e)));
+    const sigOther = generateShow(show, other, music(other), { vibe: 'auto', variation: 0, barsPerVariation: 8 }).cues.map((c) => c.name + Object.values(c.looks)[0].effect.color).join('|');
+    expect(sigOther).not.toBe(sig(0));
+  });
+
+  it('generated shows render without errors through the whole song', async () => {
+    const { generateShow } = await import('../src/core/generate');
+    for (const vibe of ['energetic', 'chill', 'psychedelic', 'minimal', 'auto'] as const) {
+      const show = newShow('festival');
+      const a = analysis();
+      const g = generateShow(show, a, music(a), { vibe, variation: 3, barsPerVariation: 4 });
+      show.cues = g.cues;
+      show.timeline = g.timeline;
+      show.music = music(a);
+      for (let t = 0; t < a.duration; t += 3.3) {
+        const f = evaluate(show, initialLive(), clock({ songTime: t, time: t, beat: (t * 128) / 60, songClock: true }));
+        for (const fx of f.fixtures) for (const b of fx.beams) expect(Number.isFinite(b.x + b.y + b.a + b.r)).toBe(true);
+      }
+    }
   });
 });

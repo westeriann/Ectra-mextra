@@ -6,6 +6,7 @@ import { ELEMENT_DEFAULTS, makeElement, makeFixture, STAGE_TEMPLATES } from '../
 import type { Fixture, Show, StageElement, StageElementKind, Vec3 } from '../core/types';
 import { clamp, rad, uid } from '../core/util';
 import { button, clear, colorInput, h, modal, numberInput, section, select, slider, textInput, toggle, vec3Input } from './dom';
+import type { GizmoMode } from '../render/viewport';
 import type { Studio } from './studio';
 
 const KIND_ICONS: Record<StageElementKind, string> = {
@@ -306,6 +307,7 @@ export function mountPlanView(root: HTMLElement, studio: Studio) {
   let fitted = -1;
   let drag: { id: string; dx: number; dz: number } | null = null;
   let pan: { x: number; y: number; cx: number; cz: number } | null = null;
+  let planDrag = 0;
 
   const toScreen = (x: number, z: number) => [canvas.clientWidth / 2 + (x - cx) * scale, canvas.clientHeight / 2 + (z - cz) * scale];
   const toWorld = (sx: number, sy: number) => [(sx - canvas.clientWidth / 2) / scale + cx, (sy - canvas.clientHeight / 2) / scale + cz];
@@ -359,6 +361,7 @@ export function mountPlanView(root: HTMLElement, studio: Studio) {
     if (!item || (item.kind === 'element' && item.el.kind === 'floor')) return;
     const p = item.kind === 'element' ? item.el.position : item.f.position;
     const [wx, wz] = toWorld(sx, sy);
+    planDrag++;
     drag = { id: id!, dx: p[0] - wx, dz: p[2] - wz };
   });
   canvas.addEventListener('pointermove', (e) => {
@@ -383,7 +386,7 @@ export function mountPlanView(root: HTMLElement, studio: Studio) {
         const f = s.fixtures.find((x) => x.id === d.id);
         if (f) f.position = [nx, f.position[1], nz];
       },
-      { coalesce: `plan-${d.id}`, source: 'plan' },
+      { coalesce: `plan-${d.id}-${planDrag}`, source: 'plan', gesture: true },
     );
   });
   const end = () => {
@@ -485,4 +488,53 @@ export function mountPlanView(root: HTMLElement, studio: Studio) {
     ctx.fillText(`${(100 / scale).toFixed(1)} m / 100 px`, w - 100, hgt - 8);
   }
   draw();
+}
+
+/** Floating tool bar over the 3D view in Stage mode: move / rotate / scale and friends. */
+export function mountStageTools(viewportEl: HTMLElement, studio: Studio) {
+  const { store } = studio;
+  const bar = h('div', { class: 'stage-tools', role: 'toolbar', 'aria-label': 'Stage tools' });
+  viewportEl.appendChild(bar);
+  const tools: { mode: GizmoMode; label: string; icon: string; key: string; hint: string }[] = [
+    { mode: 'translate', label: 'Move', icon: '✥', key: 'G', hint: 'Drag the arrows — or grab any object and drag it along the floor (Shift-drag to lift)' },
+    { mode: 'rotate', label: 'Rotate', icon: '⟳', key: 'R', hint: 'Turn objects; on lasers it changes the aim (left/right and up/down)' },
+    { mode: 'scale', label: 'Scale', icon: '⤢', key: 'C', hint: 'Resize objects (mirror balls stay round)' },
+  ];
+  const render = () => {
+    bar.hidden = store.mode !== 'stage';
+    if (bar.hidden) return;
+    const vp = studio.viewport;
+    const sel = store.sel.element;
+    const isFixture = store.show.fixtures.some((f) => f.id === sel);
+    clear(
+      bar,
+      ...tools.map((t) =>
+        h(
+          'button',
+          {
+            class: `tool ${studio.stageTool === t.mode ? 'active' : ''}`,
+            title: `${t.label} (${t.key}) — ${t.hint}`,
+            disabled: t.mode === 'scale' && isFixture,
+            onclick: () => studio.setStageTool(t.mode),
+          },
+          h('span', { class: 'tool-icon' }, t.icon),
+          h('span', { class: 'tool-label' }, t.label),
+          h('kbd', null, t.key),
+        ),
+      ),
+      h('span', { class: 'tool-sep' }),
+      h(
+        'button',
+        { class: `tool ${vp?.gizmoSnap ? 'active' : ''}`, title: 'Snap to 0.5 m / 15° / 10% steps (hold Alt while dragging for free movement)', onclick: () => studio.setStageSnap(!vp?.gizmoSnap) },
+        h('span', { class: 'tool-icon' }, '⌗'),
+        h('span', { class: 'tool-label' }, 'Snap'),
+      ),
+      h('button', { class: 'tool', title: 'Focus the camera on the selection (F)', disabled: !sel, onclick: () => sel && vp?.focus(sel) }, h('span', { class: 'tool-icon' }, '◎'), h('span', { class: 'tool-label' }, 'Focus'), h('kbd', null, 'F')),
+      h('button', { class: 'tool', title: 'Duplicate (Ctrl+D)', disabled: !sel, onclick: () => studio.duplicateStageItem() }, h('span', { class: 'tool-icon' }, '⧉'), h('span', { class: 'tool-label' }, 'Duplicate')),
+      h('button', { class: 'tool danger', title: 'Delete (Del)', disabled: !sel, onclick: () => studio.deleteStageItem() }, h('span', { class: 'tool-icon' }, '✕'), h('span', { class: 'tool-label' }, 'Delete')),
+      h('span', { class: 'tool-hint' }, 'Camera: WASD move · Q/E turn · Z/X look · drag to orbit · right-drag to pan · wheel to zoom'),
+    );
+  };
+  render();
+  store.subscribe((c) => (c.topics.has('mode') || c.topics.has('sel') || c.topics.has('show')) && render());
 }

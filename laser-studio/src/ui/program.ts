@@ -230,7 +230,10 @@ export function mountCueList(root: HTMLElement, studio: Studio) {
     if (ok) {
       store.edit((s) => {
         const c = s.cues.find((x) => x.id === id);
-        if (c) Object.assign(c, { name: name.trim() || c.name, fade, tag, transition });
+        if (c) {
+          Object.assign(c, { name: name.trim() || c.name, fade, tag, transition });
+          delete c.auto;
+        }
       });
     }
   }

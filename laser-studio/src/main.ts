@@ -6,7 +6,8 @@ import { mountOutputView } from './ui/output-view';
 import { Outputs } from './ui/outputs';
 import { mountCueList, mountEffectEditor, mountFixtureList } from './ui/program';
 import { mountSetup } from './ui/setup';
-import { mountPlanView, mountStageInspector, mountStageList } from './ui/stage-editor';
+import { mountPlanView, mountStageInspector, mountStageList, mountStageTools } from './ui/stage-editor';
+import type { Vec3 } from './core/types';
 import { Store } from './ui/store';
 import { Studio } from './ui/studio';
 import { startTour, tourDone } from './ui/tour';
@@ -71,18 +72,35 @@ async function startEditor() {
     const cur = store.sel.fixtures;
     store.setSel({ fixtures: additive ? (cur.includes(p.id) ? cur.filter((x) => x !== p.id) : [...cur, p.id]) : [p.id] });
   };
-  vp.onMove = (p, pos) => {
+  // Move / rotate / scale from the 3D gizmo or by dragging objects directly.
+  let dragNo = 0;
+  let startSize: Vec3 | null = null;
+  vp.onTransformStart = (p) => {
+    dragNo++;
+    startSize = store.show.stage.elements.find((e) => e.id === p.id)?.size.slice() as Vec3 | undefined ?? null;
+  };
+  vp.onTransform = (p, t) => {
     store.edit(
       (s) => {
         const el = s.stage.elements.find((e) => e.id === p.id);
-        if (el) el.position = pos;
         const f = s.fixtures.find((x) => x.id === p.id);
-        if (f) f.position = pos;
+        if (t.position) {
+          if (el) el.position = t.position;
+          if (f) f.position = t.position;
+        }
+        if (t.rotation) {
+          if (el) el.rotation = t.rotation[0];
+          if (f) f.aim = [t.rotation[0], Math.max(-90, Math.min(90, t.rotation[1]))];
+        }
+        if (t.scale && el && startSize) {
+          el.size = startSize.map((v, i) => Math.max(0.05, Math.round(v * t.scale![i] * 100) / 100)) as Vec3;
+        }
       },
-      { coalesce: `gizmo-${p.id}`, source: 'gizmo' },
+      { coalesce: `gizmo-${p.id}-${dragNo}`, source: 'gizmo', gesture: true },
     );
   };
   vp.onMoveEnd = () => store.emit('show');
+  mountStageTools(viewport, studio);
 
   function syncSelection() {
     vp.setWorkLights(store.mode === 'stage');
@@ -90,10 +108,14 @@ async function startEditor() {
       const id = store.sel.element;
       vp.setSelection(new Set(id ? [id] : []));
       const isFloor = store.show.stage.elements.find((e) => e.id === id)?.kind === 'floor';
-      vp.setGizmo(id && !isFloor ? { kind: store.show.fixtures.some((f) => f.id === id) ? 'fixture' : 'element', id } : null);
+      const elKind = store.show.stage.elements.find((e) => e.id === id)?.kind;
+      vp.setGizmo(id && !isFloor ? { kind: elKind ? 'element' : 'fixture', id } : null, elKind);
+      vp.dragEnabled = true;
+      vp.floorIds = new Set(store.show.stage.elements.filter((e) => e.kind === 'floor').map((e) => e.id));
     } else {
       vp.setSelection(new Set(store.sel.fixtures));
       vp.setGizmo(null);
+      vp.dragEnabled = false;
     }
   }
 
@@ -115,6 +137,9 @@ async function startEditor() {
   onBroadcast((m) => (m as { type?: string })?.type === 'hello' && studio.broadcast(true));
 
   installShortcuts(store, studio);
+  // Dev builds only: handy for debugging and automated UI tests.
+  if (import.meta.env.DEV) (window as unknown as { __studio: Studio }).__studio = studio;
+  installFileDrop(studio);
 
   window.addEventListener('beforeunload', (e) => {
     if (store.dirty && !isDesktop) e.preventDefault();
@@ -151,6 +176,8 @@ async function startEditor() {
   }
 }
 
+const FLY_KEYS = new Set(['w', 'a', 's', 'd', 'q', 'e', 'z', 'x']);
+
 function installShortcuts(store: Store, studio: Studio) {
   const typing = (e: KeyboardEvent) => {
     const t = e.target as HTMLElement;
@@ -171,6 +198,12 @@ function installShortcuts(store: Store, studio: Studio) {
         e.preventDefault();
         if (e.shiftKey) store.redo();
         else store.undo();
+      } else if (k === 'd' && store.mode === 'stage' && !typing(e)) {
+        e.preventDefault();
+        studio.duplicateStageItem();
+      } else if (k === 'a' && store.mode === 'program' && !typing(e)) {
+        e.preventDefault();
+        store.setSel({ fixtures: store.show.fixtures.map((f) => f.id) });
       } else if (k === 'y' && !typing(e)) {
         e.preventDefault();
         store.redo();
@@ -178,6 +211,13 @@ function installShortcuts(store: Store, studio: Studio) {
       return;
     }
     if (typing(e) || document.querySelector('.modal-overlay')) return;
+    // Camera: WASD move, Q/E turn, Z/X look up/down (Shift = faster). Works in every tab.
+    if (FLY_KEYS.has(k) && !e.altKey) {
+      e.preventDefault();
+      studio.viewport?.flyKeys.add(k);
+      if (e.shiftKey) studio.viewport?.flyKeys.add('shift');
+      return;
+    }
     const cam = CAMERA_PRESETS.find((c) => c.key === e.key);
     if (cam) {
       e.preventDefault();
@@ -206,18 +246,19 @@ function installShortcuts(store: Store, studio: Studio) {
         return;
       case 'Delete':
       case 'Backspace':
-        if (store.mode === 'stage' && store.sel.element) {
-          const id = store.sel.element;
-          if (store.show.stage.elements.find((x) => x.id === id)?.kind === 'floor') return;
-          store.edit((s) => {
-            s.stage.elements = s.stage.elements.filter((x) => x.id !== id);
-            s.fixtures = s.fixtures.filter((x) => x.id !== id);
-            for (const c of s.cues) delete c.looks[id];
-          });
-          store.setSel({ element: null });
-          store.pruneSelection();
-        }
+        if (store.mode === 'stage') studio.deleteStageItem();
         return;
+    }
+    if (store.mode === 'stage') {
+      const tool = ({ g: 'translate', r: 'rotate', c: 'scale' } as const)[k as 'g' | 'r' | 'c'];
+      if (tool) {
+        studio.setStageTool(tool);
+        return;
+      }
+      if (k === 'f' && store.sel.element) {
+        studio.viewport?.focus(store.sel.element);
+        return;
+      }
     }
     switch (k) {
       case 'b':
@@ -232,14 +273,11 @@ function installShortcuts(store: Store, studio: Studio) {
       case 'f':
         if (store.mode === 'show') studio.addHit('flash');
         break;
-      case 's':
+      case 'g':
         if (store.mode === 'show') studio.addHit('strobe');
         break;
       case 'k':
         if (store.mode === 'show') studio.addHit('blackout');
-        break;
-      case 'a':
-        if (store.mode === 'program') store.setSel({ fixtures: store.show.fixtures.map((f) => f.id) });
         break;
       case '?':
         void modal('Keyboard shortcuts', shortcutHelp(), [{ label: 'Close', value: true, primary: true }]);
@@ -248,12 +286,15 @@ function installShortcuts(store: Store, studio: Studio) {
   });
   window.addEventListener('keyup', (e) => {
     const k = e.key.toLowerCase();
+    if (FLY_KEYS.has(k)) studio.viewport?.flyKeys.delete(k);
+    if (e.key === 'Shift') studio.viewport?.flyKeys.delete('shift');
     if (!held.has(k)) return;
     held.delete(k);
     const pad = store.show.pads.find((p) => p.key === k);
     if (pad) studio.padUp(pad.id);
   });
   window.addEventListener('blur', () => {
+    studio.viewport?.flyKeys.clear();
     // Don't leave flash pads stuck on when the window loses focus.
     for (const k of held) {
       const pad = store.show.pads.find((p) => p.key === k);
@@ -264,6 +305,38 @@ function installShortcuts(store: Store, studio: Studio) {
   window.addEventListener('error', (e) => toast(`Error: ${e.message}`, 'error'));
 }
 
+/** Drop songs, shows or ILDA files anywhere on the window. */
+function installFileDrop(studio: Studio) {
+  const overlay = h('div', { class: 'drop-overlay', hidden: true }, h('div', { class: 'drop-card' }, h('div', { class: 'drop-icon' }, '♫'), h('h2', null, 'Drop a song to build a light show'), h('p', null, 'or a .lshow show · an .ild laser graphic')));
+  document.body.appendChild(overlay);
+  // Internal drags (cues onto the timeline) carry no files — ignore those.
+  const hasFiles = (e: DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
+  let depth = 0;
+  window.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
+    depth++;
+    overlay.hidden = false;
+  });
+  window.addEventListener('dragleave', (e) => {
+    if (!hasFiles(e)) return;
+    depth = Math.max(0, depth - 1);
+    if (!depth) overlay.hidden = true;
+  });
+  window.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = 'copy';
+  });
+  window.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth = 0;
+    overlay.hidden = true;
+    const file = e.dataTransfer?.files[0];
+    if (file) void studio.dropFile(file);
+  });
+}
+
 function shortcutHelp() {
   const rows: [string, string][] = [
     ['Space', 'Play / pause music'],
@@ -271,11 +344,18 @@ function shortcutHelp() {
     ['1 – 8 (hold)', 'Flash pads'],
     ['B', 'Blackout'],
     ['T', 'Tap tempo'],
+    ['W A S D', 'Move the camera (Shift = faster)'],
+    ['Q / E', 'Turn the camera left / right'],
+    ['Z / X', 'Look up / down'],
     ['R', 'Record new cue (Program)'],
-    ['A', 'Select all lasers (Program)'],
+    ['Ctrl+A', 'Select all lasers (Program)'],
     ['Esc', 'Clear programmer'],
-    ['F / S / K', 'Add flash / strobe / blackout hit (Show)'],
+    ['F / G / K', 'Add flash / strobe / blackout hit (Show)'],
     ['Del', 'Delete selected (Stage, Timeline)'],
+    ['G / R / C', 'Move / Rotate / Scale tool (Stage)'],
+    ['F', 'Focus camera on selection (Stage)'],
+    ['Ctrl+D', 'Duplicate selection (Stage)'],
+    ['Drag object · Shift-drag', 'Slide along the floor · lift up/down (Stage, Move tool)'],
     ['F1 – F5', 'Camera presets'],
     ['Ctrl+S / Ctrl+Shift+S / Ctrl+O', 'Save / Save as / Open'],
     ['Ctrl+Z / Ctrl+Shift+Z', 'Undo / Redo'],

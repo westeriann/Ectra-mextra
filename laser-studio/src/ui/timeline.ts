@@ -3,6 +3,7 @@
 
 import { AUTO_PARAM_IDS, AUTO_PARAMS, formatAutoValue, laneValue, type AutoParam, type AutoPoint } from '../core/automation';
 import { snapToGrid } from '../core/engine';
+import { VIBES } from '../core/generate';
 import type { HitKind } from '../core/types';
 import { clamp, fmtTime, uid } from '../core/util';
 import { button, clear, h, modal, numberInput, section, select, slider, toast, toggle } from './dom';
@@ -32,8 +33,9 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
   const empty = h(
     'div',
     { class: 'timeline-empty' },
-    h('p', null, 'Load a song to program your show to music.'),
+    h('p', { class: 'drop-hint' }, 'Drop a song anywhere — or'),
     button('Load music…', () => studio.loadMusic(), { class: 'btn btn-primary' }),
+    h('p', null, 'Laser Studio can design a whole show from it.'),
     h('p', { class: 'hint' }, 'Tempo and beats are detected automatically. Cues snap to the beat grid.'),
   );
   const zoomLabel = h('span', { class: 'hint' });
@@ -44,7 +46,7 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
     h('span', { class: 'sep' }),
     button('＋ Cue at playhead', () => addCueAt(studio.songTime ?? 0), { class: 'btn btn-sm', title: 'Adds the cue selected in the palette (or the running cue)' }),
     button('Flash', () => studio.addHit('flash'), { class: 'btn btn-sm', title: 'Add a flash hit at the playhead (F)' }),
-    button('Strobe', () => studio.addHit('strobe'), { class: 'btn btn-sm', title: 'Add a strobe hit at the playhead (S)' }),
+    button('Strobe', () => studio.addHit('strobe'), { class: 'btn btn-sm', title: 'Add a strobe hit at the playhead (G)' }),
     button('Blackout', () => studio.addHit('blackout'), { class: 'btn btn-sm', title: 'Add a blackout hit at the playhead (K)' }),
     button('Delete', () => deleteSelected(), { class: 'btn btn-sm', title: 'Delete selected item (Del)' }),
     h('span', { class: 'sep' }),
@@ -64,6 +66,8 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
   let follow = true;
   let drag: { kind: 'cue' | 'hit' | 'point'; id: string; laneId?: string; offset: number; moved: boolean } | null = null;
   let scrubbing = false;
+  /** Counts drag gestures so each drag is exactly one undo step. */
+  let dragNo = 0;
   const ctx = canvas.getContext('2d')!;
 
   const setZoom = (z: number) => {
@@ -181,12 +185,14 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
         }, { source: 'timeline' });
       }
       store.setSel({ timeline: { kind: 'point', id: pt.id, laneId: lh.lane.id } });
+      dragNo++;
       drag = { kind: 'point', id: pt.id, laneId: lh.lane.id, offset: 0, moved: false };
       return;
     }
     const hit = hitTest(x, y);
     if (hit) {
       store.setSel({ timeline: { kind: hit.kind, id: hit.id } });
+      dragNo++;
       drag = { kind: hit.kind, id: hit.id, offset: xToTime(x) - hit.time, moved: false };
     } else store.setSel({ timeline: null });
   });
@@ -216,7 +222,7 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
           if (p) Object.assign(p, { time: t, value });
           lane.points.sort((a, b) => a.time - b.time);
         },
-        { coalesce: `drag-${d.id}`, source: 'timeline' },
+        { coalesce: `drag-${d.id}-${dragNo}`, source: 'timeline', gesture: true },
       );
       drag.moved = true;
       return;
@@ -228,7 +234,7 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
         if (item) item.time = t;
         if (d.kind === 'cue') s.timeline.cues.sort((a, b) => a.time - b.time);
       },
-      { coalesce: `drag-${d.id}`, source: 'timeline' },
+      { coalesce: `drag-${d.id}-${dragNo}`, source: 'timeline', gesture: true },
     );
     drag.moved = true;
   });
@@ -566,7 +572,26 @@ export function mountMusicPanel(root: HTMLElement, studio: Studio) {
           ),
       m
         ? section(
-            'Auto-program',
+            'Song → show',
+            h('p', { class: 'hint' }, 'Designs brand-new cues, colours, hits and build-ups from the song itself. Same song = same show; Remix for a new take. Cues you edit are kept.'),
+            select({ label: 'Vibe', value: studio.songShow.vibe, options: VIBES, onChange: (v) => (studio.songShow.vibe = v) }),
+            select({
+              label: 'New look every',
+              value: String(studio.songShow.barsPerVariation),
+              options: [{ value: '4', label: '4 bars' }, { value: '8', label: '8 bars' }, { value: '16', label: '16 bars' }],
+              onChange: (v) => (studio.songShow.barsPerVariation = Number(v)),
+            }),
+            h(
+              'div',
+              { class: 'row' },
+              button('Create show from song', () => studio.generateSongShow({ variation: 0 }), { class: 'btn btn-primary' }),
+              button('Remix ↻', () => studio.remixSongShow(), { class: 'btn', title: 'A different show for the same song' }),
+            ),
+          )
+        : null,
+      m
+        ? section(
+            'Arrange my cues',
             h('p', { class: 'hint' }, 'Lays your cues along the song: calm cues on quiet parts, intense cues on loud parts, flashes on drops. Replaces the current timeline.'),
             slider({ label: 'Bars per cue', value: barsPerCue, min: 1, max: 32, onInput: (v) => (barsPerCue = v) }),
             toggle({ label: 'Flash on drops', value: accents, onChange: (v) => (accents = v) }),

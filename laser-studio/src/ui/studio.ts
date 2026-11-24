@@ -6,13 +6,16 @@ import { autoProgram } from '../core/analysis';
 import { BeatClock, evaluate, goCue, nextCue, prevCue, songBeat, type Clock, type Frame } from '../core/engine';
 import { builtinShapes, parseIlda } from '../core/ilda';
 import { effect, FILE_EXTENSION, makeCue, newShow, parseShow, serializeShow } from '../core/show';
-import type { Cue, Effect, FixtureLook, HitKind, Show } from '../core/types';
+import type { Cue, Effect, FixtureLook, HitKind, Show, Vec3 } from '../core/types';
 import { deepClone, uid } from '../core/util';
 import * as bridge from '../platform/bridge';
-import { Viewport, type CameraPreset } from '../render/viewport';
+import { Viewport, type CameraPreset, type GizmoMode } from '../render/viewport';
 import { AudioPlayer } from './audio';
-import { modal, toast } from './dom';
+import { generateShow, VIBES, type GenerateOptions, type Vibe } from '../core/generate';
+import { h, modal, select, toast } from './dom';
 import { Store } from './store';
+
+export const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'opus', 'webm'];
 
 export interface SyncMessage {
   type: 'state';
@@ -306,7 +309,10 @@ export class Studio {
     }
     this.store.edit((s) => {
       const cue = s.cues.find((c) => c.id === id);
-      if (cue) cue.looks = { ...cue.looks, ...deepClone(prog) };
+      if (cue) {
+        cue.looks = { ...cue.looks, ...deepClone(prog) };
+        delete cue.auto; // edited by hand: keep it when the song show is regenerated
+      }
     });
     this.store.setLive({ programmer: null, cueId: id, prevCueId: null });
     toast('Cue updated');
@@ -393,9 +399,88 @@ export class Studio {
   }
 
   async loadMusic() {
-    const f = await bridge.openBinaryFile('Audio', ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac']);
+    const f = await bridge.openBinaryFile('Audio', AUDIO_EXTENSIONS);
     if (!f) return;
-    await this.attachMusic(f.data, f.name, f.path);
+    if (await this.attachMusic(f.data, f.name, f.path)) await this.offerSongShow(f.name);
+  }
+
+  /** Handle a file dropped onto the window: a song, a show, or an ILDA graphic. */
+  async dropFile(file: File) {
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    try {
+      if (AUDIO_EXTENSIONS.includes(ext) || file.type.startsWith('audio/')) {
+        await this.dropMusic(await file.arrayBuffer(), file.name);
+      } else if (ext === FILE_EXTENSION || ext === 'json') {
+        if (await this.confirmDiscard()) await this.openFile({ name: file.name, text: await file.text() });
+      } else if (ext === 'ild' || ext === 'ilda') {
+        const shape = parseIlda(await file.arrayBuffer(), file.name.replace(/\.[^.]+$/, ''));
+        this.store.edit((s) => s.shapes.push(shape));
+        toast(`Imported ${shape.name} — use it with the Shape effect`);
+      } else {
+        toast(`Laser Studio can't open .${ext} files. Drop a song (mp3, wav, ogg, flac, m4a), a .lshow show or an .ild graphic.`, 'error');
+      }
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), 'error');
+    }
+  }
+
+  /** A song dropped onto the window: load it and offer to build a show from it. */
+  async dropMusic(data: ArrayBuffer, name: string) {
+    this.store.setMode('show');
+    if (await this.attachMusic(data, name, undefined)) await this.offerSongShow(name);
+  }
+
+  /** Song → show settings (kept between generations so Remix can step through variations). */
+  songShow = { vibe: 'auto' as Vibe, variation: 0, barsPerVariation: 8 };
+
+  private async offerSongShow(name: string) {
+    const opts = { ...this.songShow, variation: 0 };
+    const go = await modal(
+      'Create a light show from this song?',
+      h(
+        'div',
+        { class: 'form' },
+        h('p', null, `Laser Studio will map “${name}” into sections (intro, builds, drops…) and design brand-new cues, colours, hits and build-ups just for it. You can remix it, edit anything, or undo.`),
+        select({ label: 'Vibe', value: opts.vibe, options: VIBES, onChange: (v) => (opts.vibe = v) }),
+        select({
+          label: 'New look every',
+          value: String(opts.barsPerVariation),
+          options: [{ value: '4', label: '4 bars' }, { value: '8', label: '8 bars' }, { value: '16', label: '16 bars' }],
+          onChange: (v) => (opts.barsPerVariation = Number(v)),
+        }),
+      ),
+      [
+        { label: 'Just load the song', value: false },
+        { label: 'Create show', value: true, primary: true },
+      ],
+    );
+    if (go) this.generateSongShow(opts);
+  }
+
+  /** Design a fresh show for the loaded song. Replaces earlier generated cues you haven't edited. */
+  generateSongShow(opts: Partial<GenerateOptions> = {}) {
+    const a = this.audio.analysis;
+    const music = this.store.show.music;
+    if (!a || !music) {
+      toast('Load or drop a song first.');
+      return;
+    }
+    this.songShow = { ...this.songShow, ...opts };
+    const g = generateShow(this.store.show, a, music, this.songShow);
+    this.store.edit((s) => {
+      const padCues = new Set(s.pads.map((p) => p.cueId));
+      s.cues = s.cues.filter((c) => !c.auto || padCues.has(c.id));
+      s.cues.push(...g.cues);
+      s.timeline = g.timeline;
+    });
+    this.store.setLive({ timelineControl: true, cueId: null, prevCueId: null, programmer: null });
+    this.seek(0);
+    const drops = g.sections.filter((s) => s.kind === 'drop').length;
+    toast(`Created ${g.cues.length} cues across ${g.sections.length} sections (${drops} drop${drops === 1 ? '' : 's'}). Press Space to play · Ctrl+Z to undo`);
+  }
+
+  remixSongShow() {
+    this.generateSongShow({ variation: this.songShow.variation + 1 });
   }
 
   private async loadMusicFromPath(path: string) {
@@ -403,7 +488,7 @@ export class Studio {
     await this.attachMusic(data, path.split(/[\\/]/).pop() ?? path, path, true);
   }
 
-  private async attachMusic(data: ArrayBuffer, name: string, path: string | undefined, keepGrid = false) {
+  private async attachMusic(data: ArrayBuffer, name: string, path: string | undefined, keepGrid = false): Promise<boolean> {
     toast(`Analysing ${name}…`);
     try {
       const a = await this.audio.load(data);
@@ -422,8 +507,10 @@ export class Studio {
       this.store.setLive({ timelineControl: true });
       this.store.emit('transport');
       toast(`${name}: ${a.bpm} BPM detected`);
+      return true;
     } catch (e) {
       toast(`Couldn't decode ${name}: ${e instanceof Error ? e.message : e}`, 'error');
+      return false;
     }
   }
 
@@ -458,6 +545,53 @@ export class Studio {
 
   private ensureBuiltinShapes(show = this.store.show) {
     for (const s of builtinShapes()) if (!show.shapes.some((x) => x.id === s.id)) show.shapes.push(s);
+  }
+
+  // ---------------------------------------------------------------- stage editing
+
+  stageTool: GizmoMode = 'translate';
+
+  setStageTool(tool: GizmoMode) {
+    this.stageTool = tool;
+    this.viewport?.setGizmoMode(tool);
+    this.store.emit('sel');
+  }
+
+  setStageSnap(on: boolean) {
+    this.viewport?.setGizmoSnap(on);
+    this.store.emit('sel');
+  }
+
+  /** Duplicate the selected stage element or laser (lasers copy their looks in every cue). */
+  duplicateStageItem() {
+    const id = this.store.sel.element;
+    const el = this.store.show.stage.elements.find((e) => e.id === id);
+    const f = this.store.show.fixtures.find((x) => x.id === id);
+    if (el && el.kind !== 'floor') {
+      const copy = { ...deepClone(el), id: uid('el'), name: `${el.name} copy`, position: [el.position[0] + 1, el.position[1], el.position[2] + 1] as Vec3 };
+      this.store.edit((s) => s.stage.elements.push(copy));
+      this.store.setSel({ element: copy.id });
+    } else if (f) {
+      const copy = { ...deepClone(f), id: uid('fx'), name: `${f.name} copy`, position: [f.position[0] + 1, f.position[1], f.position[2]] as Vec3 };
+      copy.dmx = { ...f.dmx, address: Math.min(503, Math.max(0, ...this.store.show.fixtures.map((x) => x.dmx.address + 9)) + 1) };
+      this.store.edit((s) => {
+        s.fixtures.push(copy);
+        for (const c of s.cues) if (c.looks[f.id]) c.looks[copy.id] = deepClone(c.looks[f.id]);
+      });
+      this.store.setSel({ element: copy.id });
+    }
+  }
+
+  deleteStageItem() {
+    const id = this.store.sel.element;
+    if (!id || this.store.show.stage.elements.find((x) => x.id === id)?.kind === 'floor') return;
+    this.store.edit((s) => {
+      s.stage.elements = s.stage.elements.filter((x) => x.id !== id);
+      s.fixtures = s.fixtures.filter((x) => x.id !== id);
+      for (const c of s.cues) delete c.looks[id];
+    });
+    this.store.setSel({ element: null });
+    this.store.pruneSelection();
   }
 
   // ---------------------------------------------------------------- view

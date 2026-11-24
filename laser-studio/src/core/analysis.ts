@@ -16,6 +16,10 @@ export interface Analysis {
   barEnergy: number[];
   /** Times of strong onsets (big hits / drops). */
   accents: number[];
+  /** How bright (treble-heavy) each bar sounds, 0..1 across the song. */
+  barBrightness: number[];
+  /** How busy (onsets per bar) each bar is, 0..1 across the song. */
+  barBusy: number[];
 }
 
 /** Mix an AudioBuffer-like set of channels down to mono. */
@@ -159,15 +163,38 @@ export function analyze(samples: Float32Array, sampleRate: number, beatsPerBar =
   const offset = estimateOffset(env, rate, bpm);
   const barLen = (60 / bpm) * beatsPerBar;
 
-  // RMS per bar.
+  // Per bar: loudness (RMS), brightness (share of high-frequency energy, via the
+  // first difference — a cheap high-pass) and busyness (count of strong onsets).
   const barEnergy: number[] = [];
+  const bright: number[] = [];
+  const busy: number[] = [];
+  let envMean = 0;
+  for (const v of env) envMean += v;
+  envMean /= Math.max(1, env.length);
+  let envVar = 0;
+  for (const v of env) envVar += (v - envMean) ** 2;
+  const onsetThreshold = envMean + Math.sqrt(envVar / Math.max(1, env.length));
   for (let t = offset; t < duration; t += barLen) {
     const a = Math.floor(t * sampleRate);
     const b = Math.min(samples.length, Math.floor((t + barLen) * sampleRate));
     let e = 0;
-    for (let i = a; i < b; i += 4) e += samples[i] * samples[i];
+    let hi = 0;
+    for (let i = Math.max(a, 1); i < b; i += 4) {
+      e += samples[i] * samples[i];
+      const d = samples[i] - samples[i - 1];
+      hi += d * d;
+    }
     barEnergy.push(Math.sqrt(e / Math.max(1, (b - a) / 4)));
+    bright.push(e > 1e-12 ? Math.sqrt(hi / e) : 0);
+    let n = 0;
+    for (let f = Math.floor(t * rate); f < Math.min(env.length, (t + barLen) * rate); f++) if (env[f] > onsetThreshold) n++;
+    busy.push(n);
   }
+  const norm01 = (xs: number[]) => {
+    const lo = Math.min(...xs);
+    const hi = Math.max(...xs);
+    return xs.map((x) => (hi - lo > 1e-9 ? (x - lo) / (hi - lo) : 0.5));
+  };
   const maxE = Math.max(1e-9, ...barEnergy);
   const normalized = barEnergy.map((e) => e / maxE);
 
@@ -177,7 +204,16 @@ export function analyze(samples: Float32Array, sampleRate: number, beatsPerBar =
     if (normalized[i] - normalized[i - 1] > 0.3 && normalized[i] > 0.6) accents.push(offset + i * barLen);
   }
 
-  return { bpm, offset, duration, peaks: computePeaks(samples, 4000), barEnergy: normalized, accents };
+  return {
+    bpm,
+    offset,
+    duration,
+    peaks: computePeaks(samples, 4000),
+    barEnergy: normalized,
+    accents,
+    barBrightness: barEnergy.length ? norm01(bright) : [],
+    barBusy: barEnergy.length ? norm01(busy) : [],
+  };
 }
 
 /** Rough "how intense is this cue" score so auto-program can match cues to song energy. */

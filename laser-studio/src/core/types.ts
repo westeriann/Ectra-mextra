@@ -90,6 +90,8 @@ export interface Cue {
   fade: number;
   /** morph: beams move from the previous look into this one. dissolve: one fades out as the other fades in. */
   transition: 'morph' | 'dissolve';
+  /** Created by "song → show". Replaced on regenerate unless you edit it. */
+  auto?: boolean;
   looks: Record<string, FixtureLook>;
 }
 

@@ -195,7 +195,7 @@ export async function openOutputWindow(): Promise<void> {
       await existing.setFocus();
       return;
     }
-    new WebviewWindow('output', { url, title: 'Laser Studio — Output', width: 1280, height: 720 });
+    new WebviewWindow('output', { url, title: 'Laser Studio — Output', width: 1280, height: 720, dragDropEnabled: false });
     return;
   }
   window.open(url, 'laser-output', 'width=1280,height=720');

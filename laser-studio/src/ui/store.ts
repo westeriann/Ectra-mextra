@@ -73,9 +73,10 @@ export class Store {
    * Change the show. `coalesce` merges rapid edits with the same key (e.g.
    * dragging a slider) into one undo step.
    */
-  edit(fn: (show: Show) => void, opts: { source?: string; coalesce?: string } = {}) {
+  edit(fn: (show: Show) => void, opts: { source?: string; coalesce?: string; gesture?: boolean } = {}) {
     const now = performance.now();
-    const merge = opts.coalesce && opts.coalesce === this.lastCoalesce.key && now - this.lastCoalesce.at < 1000;
+    // `gesture`: the key names one drag, so merge however slowly it moves.
+    const merge = opts.coalesce && opts.coalesce === this.lastCoalesce.key && (opts.gesture || now - this.lastCoalesce.at < 1000);
     if (!merge) {
       this.undoStack.push(serializeShow(this.show));
       if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
