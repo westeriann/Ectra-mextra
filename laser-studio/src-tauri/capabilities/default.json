@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the editor and the output window",
+  "windows": ["main", "output"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-title",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-fullscreen",
+    "core:webview:allow-create-webview-window",
+    "dialog:default"
+  ]
+}
