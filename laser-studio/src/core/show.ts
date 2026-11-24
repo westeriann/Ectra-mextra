@@ -24,7 +24,7 @@ export function lookForAll(fixtures: Fixture[], e: Partial<Effect>): Record<stri
 }
 
 export function makeCue(name: string, looks: Record<string, FixtureLook>, over: Partial<Cue> = {}): Cue {
-  return { id: uid('cue'), name, tag: '#4cc9f0', fade: 0.5, looks, ...over };
+  return { id: uid('cue'), name, tag: '#4cc9f0', fade: 0.5, transition: 'morph', looks, ...over };
 }
 
 /** Starter cues so a new show has something to play immediately. */
@@ -78,7 +78,7 @@ export function newShow(templateId = 'arena'): Show {
     cues,
     pads: starterPads(cues),
     stage,
-    timeline: { cues: [], hits: [] },
+    timeline: { cues: [], hits: [], lanes: [] },
     music: null,
     bpm: 128,
     shapes: [],
@@ -106,10 +106,11 @@ export function parseShow(text: string): Show {
     version: SHOW_VERSION,
     cues: (raw.cues ?? []).map((c) => ({
       ...c,
+      transition: c.transition === 'dissolve' ? 'dissolve' : 'morph',
       looks: Object.fromEntries(Object.entries(c.looks ?? {}).map(([k, l]) => [k, { on: l.on !== false, effect: effect(l.effect) }])),
     })),
     pads: raw.pads ?? [],
-    timeline: { cues: raw.timeline?.cues ?? [], hits: raw.timeline?.hits ?? [] },
+    timeline: { cues: raw.timeline?.cues ?? [], hits: raw.timeline?.hits ?? [], lanes: raw.timeline?.lanes ?? [] },
     music: raw.music ?? null,
     bpm: raw.bpm ?? 128,
     shapes: raw.shapes ?? [],

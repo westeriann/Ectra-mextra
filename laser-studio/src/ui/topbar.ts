@@ -3,6 +3,7 @@ import { fmtTime } from '../core/util';
 import { openOutputWindow, setWindowTitle } from '../platform/bridge';
 import { CAMERA_PRESETS, type CameraPreset } from '../render/viewport';
 import { button, clear, h, modal } from './dom';
+import { startTour } from './tour';
 import type { Mode } from './store';
 import type { Studio } from './studio';
 
@@ -74,6 +75,7 @@ export function mountTopbar(root: HTMLElement, studio: Studio) {
     item('Load music…', '', () => studio.loadMusic()),
     item('Import ILDA shape…', '', () => studio.importIlda()),
     h('hr'),
+    item('Tutorial', '', () => startTour(studio)),
     item('Keyboard shortcuts', '?', () => window.dispatchEvent(new KeyboardEvent('keydown', { key: '?' }))),
   );
   const fileBtn = button('File ▾', (e) => {

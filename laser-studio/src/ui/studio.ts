@@ -78,7 +78,7 @@ export class Studio {
     const song = this.songTime;
     const music = this.store.show.music;
     if (song !== null && music && this.audio.playing) {
-      return { wall: this.wall, time: song, beat: songBeat(song, music.bpm, music.offset), songTime: song, level: this.audio.level() };
+      return { wall: this.wall, time: song, beat: songBeat(song, music.bpm, music.offset), songTime: song, level: this.audio.level(), songClock: true };
     }
     // Not playing: effects keep running on the free clock so the rig never freezes,
     // but a paused song still decides which timeline cue is shown.

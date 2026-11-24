@@ -1,3 +1,5 @@
+import type { AutomationLane } from './automation';
+
 // Core data model for a Laser Studio show. Everything here is plain JSON so a
 // show can be saved, loaded, sent to the output window, and diffed for undo.
 
@@ -86,6 +88,8 @@ export interface Cue {
   tag: string;
   /** Crossfade-in time, seconds. */
   fade: number;
+  /** morph: beams move from the previous look into this one. dissolve: one fades out as the other fades in. */
+  transition: 'morph' | 'dissolve';
   looks: Record<string, FixtureLook>;
 }
 
@@ -196,7 +200,7 @@ export interface Show {
   cues: Cue[];
   pads: Pad[];
   stage: Stage;
-  timeline: { cues: TimelineCue[]; hits: TimelineHit[] };
+  timeline: { cues: TimelineCue[]; hits: TimelineHit[]; lanes: AutomationLane[] };
   music: Music | null;
   /** Tempo used when no music is loaded (tap tempo sets this). */
   bpm: number;

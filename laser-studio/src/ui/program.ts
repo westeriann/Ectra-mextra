@@ -203,6 +203,7 @@ export function mountCueList(root: HTMLElement, studio: Studio) {
     let name = cue.name;
     let fade = cue.fade;
     let tag = cue.tag;
+    let transition = cue.transition;
     const ok = await modal(
       'Cue settings',
       h(
@@ -210,6 +211,15 @@ export function mountCueList(root: HTMLElement, studio: Studio) {
         { class: 'form' },
         textInput({ label: 'Name', value: name, onChange: (v) => (name = v) }),
         slider({ label: 'Fade in', value: fade, min: 0, max: 10, step: 0.1, unit: 's', onInput: (v) => (fade = v) }),
+        select({
+          label: 'Transition',
+          value: transition,
+          options: [
+            { value: 'morph', label: 'Morph — beams move into the new look' },
+            { value: 'dissolve', label: 'Dissolve — old look fades out, new fades in' },
+          ],
+          onChange: (v) => (transition = v),
+        }),
         colorInput({ label: 'Tag colour', value: tag, onInput: (v) => (tag = v) }),
       ),
       [
@@ -220,7 +230,7 @@ export function mountCueList(root: HTMLElement, studio: Studio) {
     if (ok) {
       store.edit((s) => {
         const c = s.cues.find((x) => x.id === id);
-        if (c) Object.assign(c, { name: name.trim() || c.name, fade, tag });
+        if (c) Object.assign(c, { name: name.trim() || c.name, fade, tag, transition });
       });
     }
   }
@@ -257,7 +267,7 @@ export function mountCueList(root: HTMLElement, studio: Studio) {
             { class: 'cue-go', title: 'Go to this cue', onclick: () => studio.goCueById(cue.id) },
             h('span', { class: 'cue-num' }, String(i + 1)),
             h('span', { class: 'cue-name' }, cue.name),
-            h('span', { class: 'cue-fade' }, `${cue.fade}s`),
+            h('span', { class: 'cue-fade', title: cue.transition === 'morph' ? 'Morph' : 'Dissolve' }, `${cue.transition === 'morph' ? '⇝' : '⇢'} ${cue.fade}s`),
           ),
           h(
             'div',

@@ -15,7 +15,8 @@ export interface Selection {
   element: string | null;
   /** Cue being edited / highlighted in the cue list. */
   cueId: string | null;
-  timeline: { kind: 'cue' | 'hit'; id: string } | null;
+  /** Selected timeline item. For automation points, `laneId` names the lane. */
+  timeline: { kind: 'cue' | 'hit' | 'point'; id: string; laneId?: string } | null;
 }
 
 export interface Change {

@@ -2,6 +2,7 @@
 // them into beams. It is a pure function of (show, live state, clock) so the
 // editor and the fullscreen output window always render the same frame.
 
+import { easeInOut, integrateProduct, isNeutral, modifiersAt, morphBeams, NEUTRAL, shiftHue, type Modifiers } from './automation';
 import { computeBeams, type EffectContext } from './effects';
 import type { Beam, Cue, Fixture, FixtureFrame, FixtureLook, Show, TimelineCue, TimelineHit } from './types';
 import { clamp, fract } from './util';
@@ -47,6 +48,8 @@ export interface Clock {
   songTime: number | null;
   /** Audio level 0..1. */
   level: number;
+  /** True when time/beat come from the playing song (enables speed automation). */
+  songClock?: boolean;
 }
 
 export interface Frame {
@@ -106,46 +109,35 @@ export function hitsAt(hits: TimelineHit[], t: number): TimelineHit[] {
   return hits.filter((h) => t >= h.time && t < h.time + Math.max(h.duration, 0.05));
 }
 
-interface Layer {
-  looks: Record<string, FixtureLook>;
-  weight: number;
-  programmer?: boolean;
+/** A crossfade between two cues (either may be missing). */
+interface Fade {
+  prev: Cue | null;
+  cur: Cue | null;
+  /** 0 = all prev, 1 = all cur. */
+  t: number;
+  morph: boolean;
 }
 
 export function evaluate(show: Show, live: LiveState, clock: Clock): Frame {
   const byId = new Map(show.cues.map((c) => [c.id, c]));
-  const layers: Layer[] = [];
-  let activeCueId: string | null = null;
+  let fade: Fade = { prev: null, cur: null, t: 1, morph: false };
 
   const useTimeline = live.timelineControl && clock.songTime !== null && show.timeline.cues.length > 0;
   if (useTimeline) {
     const { current, previous } = timelineAt(show.timeline.cues, clock.songTime!);
     const cur = current ? byId.get(current.cueId) ?? null : null;
     if (cur && current) {
-      activeCueId = cur.id;
       const t = cur.fade > 0 ? clamp((clock.songTime! - current.time) / cur.fade, 0, 1) : 1;
-      const prev = previous ? byId.get(previous.cueId) : undefined;
-      if (prev && t < 1 && prev.id !== cur.id) layers.push({ looks: prev.looks, weight: 1 - t });
-      layers.push({ looks: cur.looks, weight: t });
+      const prev = previous ? byId.get(previous.cueId) ?? null : null;
+      fade = { prev: prev && prev.id !== cur.id ? prev : null, cur, t, morph: cur.transition !== 'dissolve' };
     }
   } else {
     const cur = live.cueId ? byId.get(live.cueId) ?? null : null;
-    activeCueId = cur?.id ?? null;
     const t = live.fadeDuration > 0 ? clamp((clock.wall - live.fadeStart) / live.fadeDuration, 0, 1) : 1;
-    const prev = live.prevCueId ? byId.get(live.prevCueId) : undefined;
-    if (prev && t < 1 && prev.id !== cur?.id) layers.push({ looks: prev.looks, weight: 1 - t });
-    if (cur) layers.push({ looks: cur.looks, weight: t });
+    const prev = live.prevCueId ? byId.get(live.prevCueId) ?? null : null;
+    fade = { prev: prev && prev.id !== cur?.id ? prev : null, cur, t, morph: (cur?.transition ?? 'morph') !== 'dissolve' };
   }
-
-  // The programmer replaces the running look for the fixtures being edited.
-  const programmed = live.programmer ? new Set(Object.keys(live.programmer)) : null;
-  if (live.programmer) layers.push({ looks: live.programmer, weight: 1, programmer: true });
-
-  for (const padId of live.activePads) {
-    const pad = show.pads.find((p) => p.id === padId);
-    const cue = pad?.cueId ? byId.get(pad.cueId) : undefined;
-    if (cue) layers.push({ looks: cue.looks, weight: 1 });
-  }
+  if (fade.t >= 1) fade.prev = null;
 
   // Timeline hits.
   let flash = 0;
@@ -159,57 +151,101 @@ export function evaluate(show: Show, live: LiveState, clock: Clock): Frame {
     }
   }
 
+  const auto = automationFor(show, clock);
   const frames: FixtureFrame[] = show.fixtures.map((f) => ({ fixtureId: f.id, beams: [] }));
-  const index = new Map(show.fixtures.map((f, i) => [f.id, i]));
   const looksOut: Record<string, FixtureLook> = {};
-  const lookWeight: Record<string, number> = {};
+  const programmer = live.programmer;
+  const order = (looks: Record<string, FixtureLook>) => {
+    // Position of each fixture among those lit by a look (for phase spread).
+    const ids = show.fixtures.filter((f) => looks[f.id]?.on).map((f) => f.id);
+    return { pos: new Map(ids.map((id, k) => [id, k])), count: ids.length };
+  };
+  const prevOrder = fade.prev ? order(fade.prev.looks) : null;
+  const curOrder = fade.cur ? order(fade.cur.looks) : null;
+  const progOrder = programmer ? order(programmer) : null;
+  const ease = fade.morph ? easeInOut(fade.t) : fade.t;
 
-  for (const layer of layers) {
-    if (layer.weight <= 0.001) continue;
-    const looks = layer.looks;
-    const isProgrammer = !!layer.programmer;
-    const ids = Object.keys(looks).filter((id) => index.has(id) && looks[id].on);
-    ids.forEach((id, k) => {
-      const fi = index.get(id)!;
-      // Programmer replaces whatever the cues put on this fixture.
-      if (isProgrammer) frames[fi].beams = [];
-      else if (programmed?.has(id)) return;
-      if (isProgrammer || layer.weight > (lookWeight[id] ?? 0)) {
-        looksOut[id] = looks[id];
-        lookWeight[id] = isProgrammer ? Infinity : layer.weight;
-      }
-      const beams = beamsFor(show, show.fixtures[fi], looks[id], k, ids.length, clock);
-      for (const b of beams) frames[fi].beams.push(scale(b, layer.weight));
-    });
-  }
+  show.fixtures.forEach((f, fi) => {
+    const mods = auto(f);
+    const run = (look: FixtureLook, o: { pos: Map<string, number>; count: number }) => beamsFor(show, f, look, o.pos.get(f.id) ?? 0, o.count, clock, mods);
+    const out = frames[fi];
+    if (programmer?.[f.id]) {
+      // The programmer replaces whatever the cues put on this fixture.
+      looksOut[f.id] = programmer[f.id];
+      if (programmer[f.id].on) out.beams = run(programmer[f.id], progOrder!);
+    } else {
+      const a = fade.prev?.looks[f.id]?.on ? fade.prev.looks[f.id] : null;
+      const b = fade.cur?.looks[f.id]?.on ? fade.cur.looks[f.id] : null;
+      const A = a ? run(a, prevOrder!) : [];
+      const B = b ? run(b, curOrder!) : [];
+      if (!a) out.beams = B.map((x) => scale(x, fade.t));
+      else if (!b) out.beams = A.map((x) => scale(x, 1 - fade.t));
+      else if (fade.morph) out.beams = morphBeams(A, B, ease);
+      else out.beams = [...A.map((x) => scale(x, 1 - fade.t)), ...B.map((x) => scale(x, fade.t))];
+      const dominant = b && (fade.t >= 0.5 || !a) ? b : a ?? b;
+      if (dominant) looksOut[f.id] = dominant;
+    }
+    // Flash pads add their cue on top.
+    for (const padId of live.activePads) {
+      const pad = show.pads.find((p) => p.id === padId);
+      const cue = pad?.cueId ? byId.get(pad.cueId) : undefined;
+      const look = cue?.looks[f.id];
+      if (cue && look?.on) out.beams.push(...run(look, order(cue.looks)));
+    }
+    if (flash > 0) {
+      for (let i = 0; i < 12; i++) out.beams.push({ x: (i / 11 - 0.5) * Math.min(f.scanAngle, 90), y: 0, r: 1, g: 1, b: 1, a: flash * f.power });
+    }
+    if (master < 1) out.beams = out.beams.map((x) => scale(x, master));
+    out.beams = out.beams.filter((x) => x.a > 0.003);
+  });
 
-  if (flash > 0) {
-    show.fixtures.forEach((f, fi) => {
-      for (let i = 0; i < 12; i++) {
-        frames[fi].beams.push({ x: (i / 11 - 0.5) * Math.min(f.scanAngle, 90), y: 0, r: 1, g: 1, b: 1, a: flash * f.power });
-      }
-    });
-  }
-
-  if (master < 1) for (const fr of frames) fr.beams = fr.beams.map((b) => scale(b, master));
-  for (const fr of frames) fr.beams = fr.beams.filter((b) => b.a > 0.003);
-
-  return { fixtures: frames, flash: flash * master, master, activeCueId, looks: looksOut, beat: clock.beat, level: clock.level };
+  return { fixtures: frames, flash: flash * master, master, activeCueId: fade.cur?.id ?? null, looks: looksOut, beat: clock.beat, level: clock.level };
 }
 
-function beamsFor(show: Show, fixture: Fixture, look: FixtureLook, index: number, count: number, clock: Clock): Beam[] {
-  const ctx: EffectContext = {
-    time: clock.time,
-    beat: clock.beat,
-    index,
-    count,
-    fixture,
-    level: clock.level,
-    shapes: show.shapes,
+/**
+ * Returns a function giving each fixture its automation modifiers at the
+ * current song position (cached per group).
+ */
+function automationFor(show: Show, clock: Clock): (f: Fixture) => Modifiers {
+  const lanes = show.timeline.lanes;
+  if (clock.songTime === null || !lanes.some((l) => l.enabled && l.points.length)) return () => NEUTRAL;
+  const cache = new Map<string, Modifiers>();
+  return (f) => {
+    let m = cache.get(f.group);
+    if (!m) {
+      m = modifiersAt(lanes, f.group, clock.songTime!);
+      cache.set(f.group, m);
+    }
+    return m;
   };
+}
+
+function beamsFor(show: Show, fixture: Fixture, look: FixtureLook, index: number, count: number, clock: Clock, mods: Modifiers = NEUTRAL): Beam[] {
+  let time = clock.time;
+  let beat = clock.beat;
+  let e = look.effect;
+  if (!isNeutral(mods)) {
+    e = {
+      ...e,
+      intensity: e.intensity * mods.intensity,
+      size: e.size * mods.size,
+      spread: e.spread * mods.spread,
+      pan: e.pan + mods.pan,
+      tilt: e.tilt + mods.tilt,
+    };
+    // Speed automation: integrate the speed curve so movement never jumps.
+    if (mods.speedLanes.length && clock.songClock && clock.songTime !== null) {
+      time = integrateProduct(mods.speedLanes, 0, clock.songTime);
+      const m = show.music;
+      if (m) beat = (integrateProduct(mods.speedLanes, m.offset, clock.songTime) * m.bpm) / 60;
+    }
+  }
+  const ctx: EffectContext = { time, beat, index, count, fixture, level: clock.level, shapes: show.shapes };
   const half = fixture.scanAngle / 2;
   // Projectors can't steer past their scan field; clip beams that would.
-  return computeBeams(look.effect, ctx).filter((b) => Math.abs(b.x - look.effect.pan) <= half + 1e-6); 
+  let beams = computeBeams(e, ctx).filter((b) => Math.abs(b.x - e.pan) <= half + 1e-6);
+  if (mods.hue) beams = beams.map((b) => shiftHue(b, mods.hue));
+  return beams;
 }
 
 const scale = (b: Beam, w: number): Beam => (w === 1 ? b : { ...b, a: b.a * w });

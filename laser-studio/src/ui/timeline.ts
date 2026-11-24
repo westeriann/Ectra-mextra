@@ -1,17 +1,29 @@
 // Show mode: a music timeline with waveform, beat grid, a cue lane and a hits
 // lane, plus the music/sync panel and a cue palette.
 
+import { AUTO_PARAM_IDS, AUTO_PARAMS, formatAutoValue, laneValue, type AutoParam, type AutoPoint } from '../core/automation';
 import { snapToGrid } from '../core/engine';
 import type { HitKind } from '../core/types';
 import { clamp, fmtTime, uid } from '../core/util';
-import { button, clear, h, numberInput, section, select, slider, toast, toggle } from './dom';
+import { button, clear, h, modal, numberInput, section, select, slider, toast, toggle } from './dom';
 import type { Studio } from './studio';
 
 const RULER = 22;
 const WAVE = 74;
 const CUE_LANE = 40;
 const HIT_LANE = 28;
-const HEIGHT = RULER + WAVE + CUE_LANE + HIT_LANE;
+const AUTO_TOP = RULER + WAVE + CUE_LANE + HIT_LANE;
+const LANE_H = 52;
+const LANE_PAD = 7;
+const LANE_COLORS: Record<AutoParam, string> = {
+  intensity: '#facc15',
+  speed: '#22d3ee',
+  size: '#a78bfa',
+  spread: '#f472b6',
+  pan: '#34d399',
+  tilt: '#fb923c',
+  hue: '#e879f9',
+};
 const HIT_COLORS: Record<HitKind, string> = { flash: '#ffffff', strobe: '#facc15', blackout: '#64748b' };
 
 export function mountTimeline(root: HTMLElement, studio: Studio) {
@@ -50,7 +62,7 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
   let scroll = 0; // seconds at left edge
   let snap = true;
   let follow = true;
-  let drag: { kind: 'cue' | 'hit'; id: string; offset: number; moved: boolean } | null = null;
+  let drag: { kind: 'cue' | 'hit' | 'point'; id: string; laneId?: string; offset: number; moved: boolean } | null = null;
   let scrubbing = false;
   const ctx = canvas.getContext('2d')!;
 
@@ -90,7 +102,11 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
     if (!t) return;
     store.edit((s) => {
       if (t.kind === 'cue') s.timeline.cues = s.timeline.cues.filter((e) => e.id !== t.id);
-      else s.timeline.hits = s.timeline.hits.filter((e) => e.id !== t.id);
+      else if (t.kind === 'hit') s.timeline.hits = s.timeline.hits.filter((e) => e.id !== t.id);
+      else {
+        const lane = s.timeline.lanes.find((l) => l.id === t.laneId);
+        if (lane) lane.points = lane.points.filter((p) => p.id !== t.id);
+      }
     });
     store.setSel({ timeline: null });
   }
@@ -100,12 +116,40 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
     if (y >= RULER + WAVE && y < RULER + WAVE + CUE_LANE) {
       const sorted = [...store.show.timeline.cues].sort((a, b) => a.time - b.time);
       for (let i = sorted.length - 1; i >= 0; i--) if (sorted[i].time <= t) return { kind: 'cue', id: sorted[i].id, time: sorted[i].time };
-    } else if (y >= RULER + WAVE + CUE_LANE) {
+    } else if (y >= RULER + WAVE + CUE_LANE && y < AUTO_TOP) {
       for (const hit of store.show.timeline.hits) {
         const x0 = timeToX(hit.time);
         const x1 = Math.max(x0 + 6, timeToX(hit.time + hit.duration));
         if (x >= x0 - 3 && x <= x1) return { kind: 'hit', id: hit.id, time: hit.time };
       }
+    }
+    return null;
+  }
+
+  // ------------------------------------------------------------ automation lanes
+  const lanes = () => store.show.timeline.lanes;
+  const laneTop = (i: number) => AUTO_TOP + i * LANE_H;
+  function laneAt(y: number) {
+    const i = Math.floor((y - AUTO_TOP) / LANE_H);
+    const lane = y >= AUTO_TOP ? lanes()[i] : undefined;
+    return lane ? { lane, i, top: laneTop(i) } : null;
+  }
+  const valueToY = (param: AutoParam, v: number, top: number) => {
+    const p = AUTO_PARAMS[param];
+    return top + LANE_PAD + (1 - (v - p.min) / (p.max - p.min)) * (LANE_H - LANE_PAD * 2);
+  };
+  const yToValue = (param: AutoParam, y: number, top: number) => {
+    const p = AUTO_PARAMS[param];
+    const u = clamp(1 - (y - top - LANE_PAD) / (LANE_H - LANE_PAD * 2), 0, 1);
+    const v = p.min + u * (p.max - p.min);
+    // Snap to the neutral value when close — easy to get back to "no change".
+    return Math.abs(v - p.neutral) < (p.max - p.min) * 0.03 ? p.neutral : Math.round(v * 1000) / 1000;
+  };
+  function pointAt(x: number, y: number) {
+    const hit = laneAt(y);
+    if (!hit) return null;
+    for (const p of hit.lane.points) {
+      if (Math.hypot(timeToX(p.time) - x, valueToY(hit.lane.param, p.value, hit.top) - y) < 7) return { ...hit, point: p };
     }
     return null;
   }
@@ -122,6 +166,24 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
       studio.seek(Math.max(0, xToTime(x)));
       return;
     }
+    const lh = laneAt(y);
+    if (lh) {
+      if (x < 70) return; // lane label
+      let pt = pointAt(x, y)?.point;
+      if (!pt) {
+        // Click on empty lane space adds a point there.
+        pt = { id: uid('pt'), time: snapT(xToTime(x), e), value: yToValue(lh.lane.param, y, lh.top), curve: 'linear' };
+        const added = pt;
+        store.edit((s) => {
+          const lane = s.timeline.lanes.find((l) => l.id === lh.lane.id)!;
+          lane.points.push(added);
+          lane.points.sort((a, b) => a.time - b.time);
+        }, { source: 'timeline' });
+      }
+      store.setSel({ timeline: { kind: 'point', id: pt.id, laneId: lh.lane.id } });
+      drag = { kind: 'point', id: pt.id, laneId: lh.lane.id, offset: 0, moved: false };
+      return;
+    }
     const hit = hitTest(x, y);
     if (hit) {
       store.setSel({ timeline: { kind: hit.kind, id: hit.id } });
@@ -136,12 +198,29 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
       return;
     }
     if (!drag) {
-      const hit = hitTest(x, e.clientY - r.top);
-      canvas.style.cursor = hit ? 'grab' : e.clientY - r.top < RULER + WAVE ? 'text' : 'default';
+      const y = e.clientY - r.top;
+      const hit = hitTest(x, y) ?? pointAt(x, y);
+      canvas.style.cursor = hit ? 'grab' : y < RULER + WAVE ? 'text' : laneAt(y) ? 'crosshair' : 'default';
       return;
     }
     const t = snapT(xToTime(x) - drag.offset, e);
     const d = drag;
+    if (d.kind === 'point') {
+      const li = lanes().findIndex((l) => l.id === d.laneId);
+      if (li < 0) return;
+      const value = yToValue(lanes()[li].param, e.clientY - r.top, laneTop(li));
+      store.edit(
+        (s) => {
+          const lane = s.timeline.lanes[li];
+          const p = lane.points.find((q) => q.id === d.id);
+          if (p) Object.assign(p, { time: t, value });
+          lane.points.sort((a, b) => a.time - b.time);
+        },
+        { coalesce: `drag-${d.id}`, source: 'timeline' },
+      );
+      drag.moved = true;
+      return;
+    }
     store.edit(
       (s) => {
         const list = d.kind === 'cue' ? s.timeline.cues : s.timeline.hits;
@@ -163,6 +242,17 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
     const r = canvas.getBoundingClientRect();
     const y = e.clientY - r.top;
     const t = xToTime(e.clientX - r.left);
+    const pt = pointAt(e.clientX - r.left, y);
+    if (pt) {
+      // Double-click a point to delete it.
+      store.edit((s) => {
+        const lane = s.timeline.lanes.find((l) => l.id === pt.lane.id)!;
+        lane.points = lane.points.filter((p) => p.id !== pt.point.id);
+      });
+      store.setSel({ timeline: null });
+      return;
+    }
+    if (laneAt(y)) return;
     if (y >= RULER + WAVE + CUE_LANE) {
       const time = snapT(t);
       store.edit((s) => s.timeline.hits.push({ id: uid('hit'), time, duration: 0.4, kind: 'flash' }));
@@ -211,6 +301,8 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
     if (!m) return;
     const w = canvas.clientWidth;
     const dpr = devicePixelRatio || 1;
+    const HEIGHT = AUTO_TOP + lanes().length * LANE_H;
+    canvas.style.height = `${HEIGHT}px`;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(HEIGHT * dpr)) {
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(HEIGHT * dpr);
@@ -329,6 +421,60 @@ export function mountTimeline(root: HTMLElement, studio: Studio) {
       }
     }
 
+    // Automation lanes.
+    lanes().forEach((lane, li) => {
+      const top = laneTop(li);
+      const p = AUTO_PARAMS[lane.param];
+      ctx.fillStyle = li % 2 ? '#0c0f17' : '#0e111a';
+      ctx.fillRect(0, top, w, LANE_H);
+      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+      ctx.beginPath();
+      ctx.moveTo(0, top + 0.5);
+      ctx.lineTo(w, top + 0.5);
+      ctx.stroke();
+      // Neutral (no change) line.
+      const ny = valueToY(lane.param, p.neutral, top);
+      ctx.setLineDash([3, 4]);
+      ctx.strokeStyle = 'rgba(140,160,255,0.25)';
+      ctx.beginPath();
+      ctx.moveTo(70, ny);
+      ctx.lineTo(w, ny);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const color = LANE_COLORS[lane.param];
+      if (lane.points.length) {
+        ctx.strokeStyle = lane.enabled ? color : 'rgba(140,140,160,0.5)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let x = 70; x <= w; x += 2) {
+          const y = valueToY(lane.param, laneValue(lane, xToTime(x)), top);
+          if (x === 70) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        for (const pt of lane.points) {
+          const x = timeToX(pt.time);
+          if (x < 66 || x > w + 6) continue;
+          const sel = store.sel.timeline?.kind === 'point' && store.sel.timeline.id === pt.id;
+          ctx.fillStyle = sel ? '#ffffff' : color;
+          ctx.beginPath();
+          if (pt.curve === 'hold') ctx.rect(x - 4, valueToY(lane.param, pt.value, top) - 4, 8, 8);
+          else ctx.arc(x, valueToY(lane.param, pt.value, top), sel ? 5.5 : 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.fillStyle = 'rgba(11,13,20,0.9)';
+      ctx.fillRect(0, top, 70, LANE_H);
+      ctx.fillStyle = lane.enabled ? color : '#7f8bb3';
+      ctx.font = '10px system-ui, sans-serif';
+      ctx.fillText(p.label.toUpperCase(), 6, top + 18);
+      ctx.fillStyle = '#7f8bb3';
+      ctx.fillText(lane.target === 'all' ? 'all lasers' : lane.target, 6, top + 31);
+      const now = studio.songTime ?? 0;
+      ctx.fillText(formatAutoValue(lane.param, lane.points.length ? laneValue(lane, now) : p.neutral), 6, top + 44);
+    });
+
     // Lane labels.
     ctx.fillStyle = 'rgba(11,13,20,0.8)';
     ctx.fillRect(0, RULER + WAVE, 44, CUE_LANE + HIT_LANE);
@@ -442,6 +588,8 @@ export function mountMusicPanel(root: HTMLElement, studio: Studio) {
             numberInput({ label: 'Length (s)', value: hit.duration, step: 0.05, min: 0.05, onChange: (v) => store.edit((s) => (s.timeline.hits.find((x) => x.id === hit.id)!.duration = Math.max(0.05, v))) }),
           )
         : null,
+      m ? automationSection() : null,
+      pointEditor(),
       section(
         'Live audio',
         h('p', { class: 'hint' }, 'React to a microphone or line input — for busking along with a DJ when no song is loaded. Effects need "Audio react" turned up.'),
@@ -461,6 +609,86 @@ export function mountMusicPanel(root: HTMLElement, studio: Studio) {
       ),
     );
   };
+  function automationSection() {
+    const groups = [...new Set(store.show.fixtures.map((f) => f.group))];
+    const targets = [{ value: 'all', label: 'All lasers' }, ...groups.map((g) => ({ value: g, label: g }))];
+    let param: AutoParam = 'intensity';
+    let target = 'all';
+    const addLane = async () => {
+      const ok = await modal(
+        'Add automation lane',
+        h(
+          'div',
+          { class: 'form' },
+          h('p', { class: 'hint' }, 'A curve that changes every running look over the song — e.g. intensity rising into a drop. Click in the lane to add points, drag to move them, double-click to delete.'),
+          select({ label: 'Parameter', value: param, options: AUTO_PARAM_IDS.map((id) => ({ value: id, label: AUTO_PARAMS[id].label })), onChange: (v) => (param = v) }),
+          select({ label: 'Lasers', value: target, options: targets, onChange: (v) => (target = v) }),
+        ),
+        [
+          { label: 'Cancel', value: false },
+          { label: 'Add lane', value: true, primary: true },
+        ],
+      );
+      if (!ok) return;
+      store.edit((s) => s.timeline.lanes.push({ id: uid('lane'), param, target, enabled: true, points: [] }));
+    };
+    const buildUp = () => {
+      // Handy preset: intensity + speed ramp over the 8 bars before the playhead, then full on.
+      const mu = store.show.music!;
+      const t1 = studio.songTime ?? 0;
+      const t0 = Math.max(0, t1 - (60 / mu.bpm) * mu.beatsPerBar * 8);
+      store.edit((s) => {
+        const pts = (a: number, b: number) => [
+          { id: uid('pt'), time: t0, value: a, curve: 'smooth' as const },
+          { id: uid('pt'), time: t1, value: b, curve: 'linear' as const },
+        ];
+        s.timeline.lanes.push({ id: uid('lane'), param: 'intensity', target: 'all', enabled: true, points: pts(0.25, 1) });
+        s.timeline.lanes.push({ id: uid('lane'), param: 'speed', target: 'all', enabled: true, points: pts(0.5, 2) });
+      });
+    };
+    return section(
+      'Automation',
+      h('p', { class: 'hint' }, 'Curves on the timeline that shape every look: builds, fades, speed-ups, colour drifts.'),
+      h(
+        'div',
+        { class: 'row' },
+        button('＋ Lane', addLane, { class: 'btn btn-sm' }),
+        button('8-bar build-up to playhead', buildUp, { class: 'btn btn-sm', title: 'Adds an intensity and speed ramp ending at the playhead (put the playhead on the drop)' }),
+      ),
+      ...store.show.timeline.lanes.map((lane, i) =>
+        h(
+          'div',
+          { class: 'lane-row' },
+          h('span', { class: 'lane-name' }, AUTO_PARAMS[lane.param].label),
+          select({ value: lane.target, options: targets.some((t) => t.value === lane.target) ? targets : [...targets, { value: lane.target, label: lane.target }], onChange: (v) => store.edit((s) => (s.timeline.lanes[i].target = v)) }),
+          h('input', { type: 'checkbox', checked: lane.enabled, title: 'Enabled', onchange: (e: Event) => store.edit((s) => (s.timeline.lanes[i].enabled = (e.target as HTMLInputElement).checked)) }),
+          button('✕', () => store.edit((s) => s.timeline.lanes.splice(i, 1)), { class: 'btn btn-xs', title: 'Delete lane' }),
+        ),
+      ),
+    );
+  }
+
+  function pointEditor() {
+    const sel = store.sel.timeline;
+    if (sel?.kind !== 'point') return null;
+    const lane = store.show.timeline.lanes.find((l) => l.id === sel.laneId);
+    const pt = lane?.points.find((p) => p.id === sel.id);
+    if (!lane || !pt) return null;
+    const p = AUTO_PARAMS[lane.param];
+    const upd = (fn: (x: AutoPoint) => void) =>
+      store.edit((s) => {
+        const l = s.timeline.lanes.find((x) => x.id === lane.id)!;
+        fn(l.points.find((x) => x.id === pt.id)!);
+        l.points.sort((a, b) => a.time - b.time);
+      });
+    return section(
+      `${p.label} point`,
+      numberInput({ label: 'Time (s)', value: Number(pt.time.toFixed(3)), step: 0.01, min: 0, onChange: (v) => upd((x) => (x.time = Math.max(0, v))) }),
+      numberInput({ label: `Value (${p.min}–${p.max})`, value: pt.value, step: (p.max - p.min) / 100, min: p.min, max: p.max, onChange: (v) => upd((x) => (x.value = clamp(v, p.min, p.max))) }),
+      select({ label: 'Curve to next', value: pt.curve, options: [{ value: 'linear', label: 'Linear' }, { value: 'smooth', label: 'Smooth (ease)' }, { value: 'hold', label: 'Hold (step)' }], onChange: (v) => upd((x) => (x.curve = v)) }),
+    );
+  }
+
   function setDownbeat() {
     const t = studio.songTime;
     const m = store.show.music;

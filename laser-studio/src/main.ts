@@ -9,6 +9,7 @@ import { mountSetup } from './ui/setup';
 import { mountPlanView, mountStageInspector, mountStageList } from './ui/stage-editor';
 import { Store } from './ui/store';
 import { Studio } from './ui/studio';
+import { startTour, tourDone } from './ui/tour';
 import { mountCuePalette, mountMusicPanel, mountTimeline } from './ui/timeline';
 import { mountTopbar } from './ui/topbar';
 
@@ -130,7 +131,11 @@ async function startEditor() {
     return;
   }
 
-  // Offer to restore the autosave from last time.
+  // First run: show the tour. Later runs: offer to restore the autosave.
+  if (!tourDone()) {
+    startTour(studio);
+    return;
+  }
   const saved = Store.loadAutosave();
   if (saved && saved.show.cues.length) {
     const restore = await modal('Restore last session?', `Laser Studio found an autosave of “${saved.name}”.`, [

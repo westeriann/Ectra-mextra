@@ -80,10 +80,10 @@ describe('engine', () => {
     expect(frame.fixtures.some((f) => f.beams.length > 0)).toBe(true);
   });
 
-  it('crossfades between cues', () => {
+  it('dissolves between cues', () => {
     const show = newShow('club');
     const a = { ...show.cues[0], fade: 0 };
-    const b = { ...show.cues[6], fade: 2 };
+    const b = { ...show.cues[6], fade: 2, transition: 'dissolve' as const };
     show.cues = [a, b];
     let live = goCue(initialLive(), a, 0);
     live = goCue(live, b, 10);
@@ -148,6 +148,90 @@ describe('engine', () => {
   it('snaps times to the beat grid', () => {
     expect(snapToGrid(1.02, 120, 0)).toBeCloseTo(1, 6);
     expect(snapToGrid(1.13, 120, 0, 4)).toBeCloseTo(1.125, 6);
+  });
+});
+
+describe('transitions and automation in the engine', () => {
+  it('morphs beams from one look into the next', () => {
+    const show = newShow('club');
+    const fx = show.fixtures[0];
+    const look = (spread: number, color: string) => ({ [fx.id]: { on: true, effect: effect({ kind: 'static', beams: 3, spread, color, mirror: false }) } });
+    const a = { ...show.cues[0], id: 'A', fade: 0, looks: look(20, '#ff0000') };
+    const b = { ...show.cues[1], id: 'B', fade: 2, transition: 'morph' as const, looks: look(60, '#0000ff') };
+    show.cues = [a, b];
+    let live = goCue(initialLive(), a, 0);
+    live = goCue(live, b, 10);
+    const mid = evaluate(show, live, clock({ wall: 11 })).fixtures[0].beams;
+    expect(mid).toHaveLength(3);
+    // Halfway: beams sit between the two fans and the colour is half red, half blue.
+    expect(mid[0].x).toBeCloseTo(-20, 6);
+    expect(mid[2].x).toBeCloseTo(20, 6);
+    expect(mid[0].r).toBeCloseTo(0.5, 6);
+    expect(mid[0].b).toBeCloseTo(0.5, 6);
+    expect(evaluate(show, live, clock({ wall: 12.5 })).fixtures[0].beams[2].x).toBeCloseTo(30, 6);
+  });
+
+  it('applies automation lanes at the song position', () => {
+    const show = newShow('club');
+    show.timeline.cues = [{ id: 't1', time: 0, cueId: show.cues[0].id }];
+    show.timeline.lanes = [
+      { id: 'l1', param: 'intensity', target: 'all', enabled: true, points: [{ id: 'p1', time: 0, value: 0, curve: 'linear' }, { id: 'p2', time: 10, value: 1, curve: 'linear' }] },
+      { id: 'l2', param: 'tilt', target: 'Bar', enabled: true, points: [{ id: 'p3', time: 0, value: 10, curve: 'hold' }] },
+    ];
+    const at = (t: number) => evaluate(show, initialLive(), clock({ songTime: t, time: t })).fixtures[0].beams;
+    expect(at(2.5)[0].a).toBeCloseTo(0.25, 6);
+    expect(at(10)[0].a).toBeCloseTo(1, 6);
+    expect(at(5)[0].y).toBeCloseTo(10, 6);
+    show.timeline.lanes[1].target = 'Somewhere else';
+    expect(at(5)[0].y).toBeCloseTo(0, 6);
+  });
+});
+
+describe('automation', () => {
+  const lane = (points: [number, number, ('linear' | 'smooth' | 'hold')?][], param: 'speed' | 'intensity' = 'speed') => ({
+    id: 'l', param, target: 'all', enabled: true,
+    points: points.map(([time, value, curve], i) => ({ id: `p${i}`, time, value, curve: curve ?? ('linear' as const) })),
+  });
+
+  it('interpolates linear, smooth and hold segments and holds the ends', async () => {
+    const { laneValue } = await import('../src/core/automation');
+    const l = lane([[0, 0], [10, 1, 'smooth'], [20, 3, 'hold'], [30, 0]]);
+    expect(laneValue(l, -5)).toBe(0);
+    expect(laneValue(l, 5)).toBeCloseTo(0.5);
+    expect(laneValue(l, 12.5)).toBeCloseTo(1 + 2 * 0.15625);
+    expect(laneValue(l, 15)).toBeCloseTo(2);
+    expect(laneValue(l, 25)).toBe(3);
+    expect(laneValue(l, 99)).toBe(0);
+  });
+
+  it('integrates speed curves exactly so phase never jumps', async () => {
+    const { integrateProduct } = await import('../src/core/automation');
+    const ramp = lane([[0, 1], [10, 3]]);
+    expect(integrateProduct([ramp], 0, 10)).toBeCloseTo(20, 9);
+    expect(integrateProduct([ramp], 0, 20)).toBeCloseTo(50, 9);
+    expect(integrateProduct([ramp, lane([[0, 2]])], 0, 10)).toBeCloseTo(40, 9);
+    const hold = lane([[0, 1, 'hold'], [5, 4]]);
+    expect(integrateProduct([hold], 0, 6)).toBeCloseTo(9, 6);
+    // Continuity: tiny step in time -> tiny step in integral.
+    const a = integrateProduct([ramp], 0, 4.999999);
+    const b = integrateProduct([ramp], 0, 5.000001);
+    expect(b - a).toBeLessThan(1e-4);
+  });
+
+  it('shifts hue', async () => {
+    const { shiftHue } = await import('../src/core/automation');
+    const g = shiftHue({ x: 0, y: 0, r: 1, g: 0, b: 0, a: 1 }, 1 / 3);
+    expect(g.g).toBeCloseTo(1);
+    expect(g.r).toBeCloseTo(0);
+  });
+
+  it('morph keeps total brightness at the ends when beam counts differ', async () => {
+    const { morphBeams } = await import('../src/core/automation');
+    const A = [{ x: 0, y: 0, r: 1, g: 1, b: 1, a: 1 }];
+    const B = Array.from({ length: 4 }, (_, i) => ({ x: i, y: 0, r: 1, g: 1, b: 1, a: 1 }));
+    const near0 = morphBeams(A, B, 1e-9).reduce((s, x) => s + x.a, 0);
+    expect(near0).toBeCloseTo(1, 6);
+    expect(morphBeams(A, B, 0.5)).toHaveLength(4);
   });
 });
 
