@@ -47,18 +47,17 @@ function findItem(show: Show, id: string | null): Item | null {
 
 export function mountStageList(root: HTMLElement, studio: Studio) {
   const { store } = studio;
-  const add = (kind: StageElementKind) => {
-    const spawn: Partial<Record<StageElementKind, Vec3>> = { truss: [0, 8, -6], crowd: [0, 0, 10], mirror: [0, 3, 4], mirrorball: [0, 5, 2] };
-    const el = makeElement(kind, spawn[kind] ?? [0, 0, -6]);
-    store.edit((s) => s.stage.elements.push(el));
-    store.setSel({ element: el.id });
-  };
-  const addFixture = () => {
-    const n = store.show.fixtures.length;
-    const used = Math.max(0, ...store.show.fixtures.map((f) => f.dmx.address + 9));
-    const f = makeFixture(`Laser ${n + 1}`, [0, 6, -6], { dmx: { universe: 0, address: Math.min(503, used + 1) } });
-    store.edit((s) => s.fixtures.push(f));
-    store.setSel({ element: f.id });
+  const add = (kind: StageElementKind) => placeStageItem(studio, kind);
+  const addFixture = () => placeStageItem(studio, 'laser');
+  /** Add buttons can also be dragged onto the floor plan or the 3D view to place the item there. */
+  const draggable = (btn: HTMLButtonElement, kind: StageItemKind) => {
+    btn.draggable = true;
+    btn.addEventListener('dragstart', (e) => {
+      e.dataTransfer?.setData(STAGE_ITEM_MIME, kind);
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy';
+    });
+    btn.title += ' — or drag it onto the floor plan / 3D view';
+    return btn;
   };
   const addRow = async () => {
     let count = 6;
@@ -108,11 +107,11 @@ export function mountStageList(root: HTMLElement, studio: Studio) {
       h(
         'div',
         { class: 'add-grid' },
-        ...(Object.keys(ELEMENT_DEFAULTS) as StageElementKind[]).map((k) => button(h('span', null, KIND_ICONS[k], ' ', ELEMENT_DEFAULTS[k].name), () => add(k), { class: 'btn btn-sm', title: `Add ${ELEMENT_DEFAULTS[k].name}` })),
+        ...(Object.keys(ELEMENT_DEFAULTS) as StageElementKind[]).map((k) => draggable(button(h('span', null, KIND_ICONS[k], ' ', ELEMENT_DEFAULTS[k].name), () => add(k), { class: 'btn btn-sm', title: `Add ${ELEMENT_DEFAULTS[k].name}` }), k)),
       ),
       h('div', { class: 'list-title' }, 'Elements'),
       ...store.show.stage.elements.map((el) => row(el.id, KIND_ICONS[el.kind], el.name, el.kind)),
-      h('div', { class: 'list-title' }, 'Lasers', h('span', { class: 'grow' }), button('＋ Laser', addFixture, { class: 'btn btn-xs' }), button('＋ Row', addRow, { class: 'btn btn-xs' })),
+      h('div', { class: 'list-title' }, 'Lasers', h('span', { class: 'grow' }), draggable(button('＋ Laser', addFixture, { class: 'btn btn-xs', title: 'Add a laser' }), 'laser'), button('＋ Row', addRow, { class: 'btn btn-xs' })),
       ...store.show.fixtures.map((f) => row(f.id, '✦', f.name, `${f.dmx.universe}.${f.dmx.address}`)),
     );
   };
@@ -346,6 +345,20 @@ export function mountPlanView(root: HTMLElement, studio: Studio) {
   }
 
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  // Drop items from the add buttons onto the plan.
+  canvas.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer?.types.includes(STAGE_ITEM_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  canvas.addEventListener('drop', (e) => {
+    const kind = e.dataTransfer?.getData(STAGE_ITEM_MIME) as StageItemKind | undefined;
+    if (!kind) return;
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect();
+    const [wx, wz] = toWorld(e.clientX - r.left, e.clientY - r.top);
+    placeStageItem(studio, kind, [Math.round(wx * 2) / 2, Math.round(wz * 2) / 2]);
+  });
   canvas.addEventListener('pointerdown', (e) => {
     canvas.setPointerCapture(e.pointerId);
     const r = canvas.getBoundingClientRect();
@@ -537,4 +550,28 @@ export function mountStageTools(viewportEl: HTMLElement, studio: Studio) {
   };
   render();
   store.subscribe((c) => (c.topics.has('mode') || c.topics.has('sel') || c.topics.has('show')) && render());
+}
+
+export const STAGE_ITEM_MIME = 'application/x-stage-item';
+export type StageItemKind = StageElementKind | 'laser';
+
+/** Sensible heights for new items: trusses and mirror balls hang, lasers sit at head height and up. */
+const SPAWN_Y: Partial<Record<StageItemKind, number>> = { truss: 8, mirror: 3, mirrorball: 5, laser: 6 };
+const SPAWN_XZ: Partial<Record<StageItemKind, [number, number]>> = { crowd: [0, 10], mirror: [0, 4], mirrorball: [0, 2] };
+
+/** Add a stage element or a laser — at `xz` (from a drop) or a default spot. */
+export function placeStageItem(studio: Studio, kind: StageItemKind, xz?: [number, number]) {
+  const { store } = studio;
+  const [x, z] = xz ?? SPAWN_XZ[kind] ?? [0, -6];
+  const y = SPAWN_Y[kind] ?? 0;
+  if (kind === 'laser') {
+    const used = Math.max(0, ...store.show.fixtures.map((f) => f.dmx.address + 9));
+    const f = makeFixture(`Laser ${store.show.fixtures.length + 1}`, [x, y, z], { dmx: { universe: 0, address: Math.min(503, used + 1) } });
+    store.edit((s) => s.fixtures.push(f));
+    store.setSel({ element: f.id });
+    return;
+  }
+  const el = makeElement(kind, [x, y, z]);
+  store.edit((s) => s.stage.elements.push(el));
+  store.setSel({ element: el.id });
 }

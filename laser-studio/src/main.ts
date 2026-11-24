@@ -6,7 +6,7 @@ import { mountOutputView } from './ui/output-view';
 import { Outputs } from './ui/outputs';
 import { mountCueList, mountEffectEditor, mountFixtureList } from './ui/program';
 import { mountSetup } from './ui/setup';
-import { mountPlanView, mountStageInspector, mountStageList, mountStageTools } from './ui/stage-editor';
+import { mountPlanView, mountStageInspector, mountStageList, mountStageTools, placeStageItem, STAGE_ITEM_MIME, type StageItemKind } from './ui/stage-editor';
 import type { Vec3 } from './core/types';
 import { Store } from './ui/store';
 import { Studio } from './ui/studio';
@@ -101,6 +101,19 @@ async function startEditor() {
   };
   vp.onMoveEnd = () => store.emit('show');
   mountStageTools(viewport, studio);
+  // Drop items from the Stage add buttons straight into the 3D view.
+  viewport.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer?.types.includes(STAGE_ITEM_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  viewport.addEventListener('drop', (e) => {
+    const kind = e.dataTransfer?.getData(STAGE_ITEM_MIME) as StageItemKind | undefined;
+    if (!kind) return;
+    e.preventDefault();
+    const xz = vp.floorPointAt(e.clientX, e.clientY);
+    if (xz) placeStageItem(studio, kind, [Math.round(xz[0] * 2) / 2, Math.round(xz[1] * 2) / 2]);
+  });
 
   function syncSelection() {
     vp.setWorkLights(store.mode === 'stage');
@@ -140,6 +153,8 @@ async function startEditor() {
   // Dev builds only: handy for debugging and automated UI tests.
   if (import.meta.env.DEV) (window as unknown as { __studio: Studio }).__studio = studio;
   installFileDrop(studio);
+  // Reconnect the live audio input used last time (desktop: system audio or an input).
+  void studio.audio.restoreLive();
 
   window.addEventListener('beforeunload', (e) => {
     if (store.dirty && !isDesktop) e.preventDefault();

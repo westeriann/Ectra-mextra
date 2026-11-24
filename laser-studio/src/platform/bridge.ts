@@ -2,7 +2,7 @@
 // it calls the Rust backend; in a plain browser (`npm run dev`) it falls back
 // to file pickers/downloads and turns hardware features into no-ops.
 
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 export const isDesktop = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -131,6 +131,30 @@ export const hardware = {
   },
   async etherdreamStop(): Promise<void> {
     if (isDesktop) await invoke('etherdream_stop');
+  },
+};
+
+export interface AudioDeviceInfo {
+  id: string;
+  name: string;
+  /** 'input' = microphone / line in; 'system' = what this output device plays (Windows). */
+  kind: 'input' | 'system';
+  isDefault: boolean;
+}
+
+/** Native audio capture (desktop app): inputs, and system-audio loopback on Windows. */
+export const nativeAudio = {
+  async devices(): Promise<AudioDeviceInfo[]> {
+    return isDesktop ? invoke<AudioDeviceInfo[]>('audio_devices') : [];
+  },
+  /** Start capturing; `onBlock` gets mono Float32 samples. Resolves with the sample rate. */
+  async start(id: string, onBlock: (samples: Float32Array) => void): Promise<{ sampleRate: number; name: string }> {
+    const ch = new Channel<ArrayBuffer>();
+    ch.onmessage = (buf) => onBlock(new Float32Array(buf instanceof ArrayBuffer ? buf : new Uint8Array(buf as unknown as number[]).buffer));
+    return invoke<{ sampleRate: number; name: string }>('audio_start', { id, onData: ch });
+  },
+  async stop(): Promise<void> {
+    if (isDesktop) await invoke('audio_stop');
   },
 };
 

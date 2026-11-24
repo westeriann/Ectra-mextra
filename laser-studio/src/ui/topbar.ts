@@ -4,6 +4,7 @@ import { openOutputWindow, setWindowTitle } from '../platform/bridge';
 import { CAMERA_PRESETS, type CameraPreset } from '../render/viewport';
 import { button, clear, h, modal } from './dom';
 import { startTour } from './tour';
+import { mountAudioControl } from './audio-panel';
 import type { Mode } from './store';
 import type { Studio } from './studio';
 
@@ -36,6 +37,8 @@ export function mountTopbar(root: HTMLElement, studio: Studio) {
   const undoBtn = button('↶', () => store.undo(), { class: 'btn btn-icon', title: 'Undo (Ctrl+Z)' });
   const redoBtn = button('↷', () => store.redo(), { class: 'btn btn-icon', title: 'Redo (Ctrl+Shift+Z)' });
 
+  const audioHost = h('div', { class: 'audio-host' });
+  mountAudioControl(audioHost, studio);
   const camSelect = h(
     'select',
     { title: 'Camera', onchange: (e: Event) => studio.setCamera((e.target as HTMLSelectElement).value as CameraPreset) },
@@ -106,6 +109,7 @@ export function mountTopbar(root: HTMLElement, studio: Studio) {
         h('span', { class: 'tb-tempo' }, beatDot, bpm),
         button('Tap', () => studio.tap(), { class: 'btn', title: 'Tap tempo (T) — used when no song is loaded' }),
       ),
+      audioHost,
       h('label', { class: 'master', title: 'Master intensity' }, 'Master', master),
       blackout,
       camSelect,

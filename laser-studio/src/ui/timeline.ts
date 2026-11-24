@@ -6,7 +6,7 @@ import { snapToGrid } from '../core/engine';
 import { VIBES } from '../core/generate';
 import type { HitKind } from '../core/types';
 import { clamp, fmtTime, uid } from '../core/util';
-import { button, clear, h, modal, numberInput, section, select, slider, toast, toggle } from './dom';
+import { button, clear, h, modal, numberInput, section, select, slider, toggle } from './dom';
 import type { Studio } from './studio';
 
 const RULER = 22;
@@ -617,20 +617,8 @@ export function mountMusicPanel(root: HTMLElement, studio: Studio) {
       pointEditor(),
       section(
         'Live audio',
-        h('p', { class: 'hint' }, 'React to a microphone or line input — for busking along with a DJ when no song is loaded. Effects need "Audio react" turned up.'),
-        toggle({
-          label: 'Microphone / line in',
-          value: studio.audio.micOn,
-          onChange: async (v) => {
-            try {
-              if (v) await studio.audio.enableMic();
-              else studio.audio.disableMic();
-            } catch (e) {
-              toast(`Microphone unavailable: ${e instanceof Error ? e.message : e}`, 'error');
-            }
-            render();
-          },
-        }),
+        h('p', { class: 'hint' }, 'Mic, line in and system audio — plus all the audio reactions — are under the 🎤 Audio button in the top bar. While a song plays here, the reactions follow the song.'),
+        button('Open audio settings', () => window.dispatchEvent(new CustomEvent('ls:open-audio')), { class: 'btn btn-sm' }),
       ),
     );
   };

@@ -14,6 +14,7 @@ import { AudioPlayer } from './audio';
 import { generateShow, VIBES, type GenerateOptions, type Vibe } from '../core/generate';
 import { h, modal, select, toast } from './dom';
 import { Store } from './store';
+import { SILENT, type AudioFeatures } from '../core/live';
 
 export const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'opus', 'webm'];
 
@@ -29,6 +30,7 @@ export interface SyncMessage {
   beat: number;
   bpm: number;
   level: number;
+  audio: AudioFeatures;
   at: number;
 }
 
@@ -46,6 +48,8 @@ export class Studio {
   /** True when the output window needs the full show again. */
   private showDirty = true;
   fps = 0;
+  /** What the show hears this frame (song or live input). */
+  heard: AudioFeatures = SILENT;
   /** Hooks run every frame after evaluation (hardware outputs). */
   readonly frameHooks: ((frame: Frame, show: Show) => void)[] = [];
 
@@ -80,12 +84,13 @@ export class Studio {
   clock(): Clock {
     const song = this.songTime;
     const music = this.store.show.music;
+    const audio = this.heard;
     if (song !== null && music && this.audio.playing) {
-      return { wall: this.wall, time: song, beat: songBeat(song, music.bpm, music.offset), songTime: song, level: this.audio.level(), songClock: true };
+      return { wall: this.wall, time: song, beat: songBeat(song, music.bpm, music.offset), songTime: song, level: audio.level, songClock: true, audio };
     }
-    // Not playing: effects keep running on the free clock so the rig never freezes,
-    // but a paused song still decides which timeline cue is shown.
-    return { wall: this.wall, time: this.wall, beat: this.beatClock.beat, songTime: song, level: this.audio.level() };
+    // Not playing: effects keep running on the free clock (which follows the live
+    // tempo when live audio is on), and a paused song still decides the timeline cue.
+    return { wall: this.wall, time: this.wall, beat: this.beatClock.beat, songTime: song, level: audio.level, audio };
   }
 
   // ---------------------------------------------------------------- loop
@@ -114,6 +119,12 @@ export class Studio {
     this.last = now;
     this.fps = this.fps * 0.95 + (1 / Math.max(dt, 1e-3)) * 0.05;
     this.beatClock.advance(dt);
+    // Hear the music once per frame; with live audio, the beat clock follows the detected tempo.
+    this.heard = this.audio.features(now / 1000);
+    if (this.followingLive) {
+      this.beatClock.bpm = Math.round(this.audio.analyzer.bpm * 10) / 10;
+      this.beatClock.beat = this.audio.analyzer.beatAt(now / 1000);
+    }
     const show = this.store.show;
     const clock = this.clock();
     this.frame = evaluate(show, this.store.live, clock);
@@ -122,7 +133,8 @@ export class Studio {
       this.viewport.render(show, this.frame, clock.time, dt);
     }
     for (const hook of this.frameHooks) hook(this.frame, show);
-    if (now - this.lastBroadcast > 50) {
+    // Live audio hits are short: send every frame while sound is coming in.
+    if (now - this.lastBroadcast > (this.heard.active ? 0 : 50)) {
       this.lastBroadcast = now;
       this.broadcast();
     }
@@ -142,6 +154,7 @@ export class Studio {
       beat: clock.beat,
       bpm: this.bpm,
       level: this.frame.level,
+      audio: this.heard,
       at: Date.now(),
     };
     if (force || this.showDirty) {
@@ -182,7 +195,17 @@ export class Studio {
     this.store.emit('transport');
   }
 
+  /** True while the beat clock is following live audio. */
+  get followingLive() {
+    return this.audio.liveTempoReady && this.store.show.audio.followTempo;
+  }
+
   tap() {
+    if (this.audio.live && !this.audio.playing) {
+      // Live audio: the tap teaches the tracker the tempo and where the beat is.
+      this.audio.analyzer.tap(performance.now() / 1000);
+      return;
+    }
     const bpm = this.beatClock.tap(this.wall);
     if (bpm && !this.audio.loaded) {
       this.store.edit((s) => (s.bpm = bpm), { coalesce: 'tap' });

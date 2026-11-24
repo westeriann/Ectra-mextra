@@ -1,4 +1,5 @@
 import type { AutomationLane } from './automation';
+import type { AudioReactSettings } from './react';
 
 // Core data model for a Laser Studio show. Everything here is plain JSON so a
 // show can be saved, loaded, sent to the output window, and diffed for undo.
@@ -216,6 +217,8 @@ export interface Show {
   bpm: number;
   shapes: Shape[];
   output: OutputSettings;
+  /** Live audio reactions (see react.ts). */
+  audio: AudioReactSettings;
 }
 
 /** A single rendered beam, in fixture-local angles. */

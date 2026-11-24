@@ -2,6 +2,7 @@
 //! browser can't speak (Art-Net, OSC, MIDI/timecode, Ether Dream laser DACs).
 
 mod artnet;
+mod audio_in;
 mod etherdream;
 mod files;
 mod midi;
@@ -11,6 +12,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(artnet::ArtnetState::default())
+        .manage(audio_in::AudioInState::default())
         .manage(osc::OscState::default())
         .manage(midi::MidiState::default())
         .manage(etherdream::DacState::default())
@@ -21,6 +23,9 @@ pub fn run() {
             files::write_binary_file,
             files::startup_file,
             artnet::artnet_send,
+            audio_in::audio_devices,
+            audio_in::audio_start,
+            audio_in::audio_stop,
             osc::osc_start,
             osc::osc_stop,
             midi::midi_ports,

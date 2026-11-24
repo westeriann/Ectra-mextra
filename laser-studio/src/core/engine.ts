@@ -4,6 +4,8 @@
 
 import { easeInOut, integrateProduct, isNeutral, modifiersAt, morphBeams, NEUTRAL, shiftHue, type Modifiers } from './automation';
 import { computeBeams, type EffectContext } from './effects';
+import type { AudioFeatures } from './live';
+import { audioMods, NO_AUDIO } from './react';
 import type { Beam, Cue, Fixture, FixtureFrame, FixtureLook, Show, TimelineCue, TimelineHit } from './types';
 import { clamp, fract } from './util';
 
@@ -50,6 +52,8 @@ export interface Clock {
   level: number;
   /** True when time/beat come from the playing song (enables speed automation). */
   songClock?: boolean;
+  /** Live audio features (bands, hits) for audio reactions. */
+  audio?: AudioFeatures;
 }
 
 export interface Frame {
@@ -152,6 +156,13 @@ export function evaluate(show: Show, live: LiveState, clock: Clock): Frame {
   }
 
   const auto = automationFor(show, clock);
+  // Audio reactions apply to every fixture on top of automation.
+  const am = audioMods(show.audio, clock.audio, clock.beat);
+  if (am.flash > flash) flash = am.flash * (live.blackout ? 0 : 1);
+  const withAudio = (m: Modifiers): Modifiers =>
+    am === NO_AUDIO
+      ? m
+      : { ...m, intensity: m.intensity * am.intensity, size: m.size * am.size, spread: m.spread * am.spread, tilt: m.tilt + am.tilt, pan: m.pan + am.pan, hue: m.hue + am.hue };
   const frames: FixtureFrame[] = show.fixtures.map((f) => ({ fixtureId: f.id, beams: [] }));
   const looksOut: Record<string, FixtureLook> = {};
   const programmer = live.programmer;
@@ -166,7 +177,7 @@ export function evaluate(show: Show, live: LiveState, clock: Clock): Frame {
   const ease = fade.morph ? easeInOut(fade.t) : fade.t;
 
   show.fixtures.forEach((f, fi) => {
-    const mods = auto(f);
+    const mods = withAudio(auto(f));
     const run = (look: FixtureLook, o: { pos: Map<string, number>; count: number }) => beamsFor(show, f, look, o.pos.get(f.id) ?? 0, o.count, clock, mods);
     const out = frames[fi];
     if (programmer?.[f.id]) {

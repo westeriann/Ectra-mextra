@@ -235,6 +235,16 @@ export class Viewport {
     }
   }
 
+  /** Where a screen point lands on the floor (for dropping new items into 3D). */
+  floorPointAt(clientX: number, clientY: number): [number, number] | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const hit = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -this.stage.floorY), new THREE.Vector3());
+    return hit ? [hit.x, hit.z] : null;
+  }
+
   /** Ids of floor elements (never dragged). */
   floorIds = new Set<string>();
   private isFloor(id: string) {

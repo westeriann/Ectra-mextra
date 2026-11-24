@@ -31,9 +31,17 @@ Built with [Tauri 2](https://tauri.app) (Rust backend) and TypeScript + [three.j
 - Add and edit floors, risers, truss, LED screens (animated, beat-reactive), speaker stacks, crowds (people bounce on the beat), walls and pillars.
 - **Beams stop at solid objects** (screens, walls, risers, speakers, pillars) and leave glowing hit spots where they land. This can be turned off per venue.
 - **Mirrors** (rotate and tilt them to bounce beams around the room) and **mirror balls** (each beam that hits one splits into a spinning spray of reflections).
-- Move things with the 3D gizmo or by dragging on the top-down floor plan. Size, rotation and colour are set in the inspector.
+- Tools: **Move (G)**, **Rotate (R)**, which also aims lasers, and **Scale (C)**, with snapping, Focus (F), Duplicate (Ctrl+D) and Delete. Grab any object and drag it in 3D (Shift-drag lifts it), or drag it on the top-down floor plan.
+- Drag items from the add buttons straight onto the floor plan or into the 3D view to place them.
+- Fly the camera with **WASD**, turn with **Q/E** and look up or down with **Z/X** (Shift = faster).
 - Place lasers one at a time or as a row. Each has an aim, scan angle, beam limit, power, DMX patch and an optional DAC.
 - Haze, house lights and sky colour.
+
+**Live audio** (🎤 button in the top bar)
+- Listen to a microphone or line in. In the desktop app on Windows you can also pick **system audio**, i.e. whatever the PC is playing (Spotify, DJ software), with no microphone needed.
+- Auto-levelled bass, mid and treble meters, kick, snare and hi-hat detection, and **live tempo tracking**. Beat-synced effects lock to the music (tap, ×2 and ÷2 to correct it). The analysis is ported from our sister project [Amethyst VJ](https://github.com/westeriann/amethyst); see `docs/AMETHYST.md`.
+- **Reactions** work on every look with no per-cue setup: Kick pump, Bass breathes, Hat shimmer, Snare colour, Beat sway and Kick flash. You can also add your own (any sound → brightness, size, spread, tilt, sway, colour or flash).
+- While a song plays in the Show tab, the reactions follow the song instead.
 
 **Setup** (hardware, desktop app only)
 - **Art-Net output**: every laser's look is sent as a 10-channel DMX profile (Dimmer, Effect, Pan, Tilt, Size, Speed, R, G, B, Strobe).

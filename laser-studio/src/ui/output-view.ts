@@ -65,6 +65,7 @@ export function mountOutputView(root: HTMLElement) {
           songTime: s.songTime === null ? null : s.songTime + (s.playing ? since : 0),
           level: s.level,
           songClock: s.playing && s.songTime !== null,
+          audio: s.audio,
         }
       : { wall: now / 1000, time: now / 1000, beat: now / 1000 * 2, songTime: null, level: 0 };
     const frame = evaluate(show, s?.live ?? initialLive(), clock);

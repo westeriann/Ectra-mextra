@@ -1,6 +1,7 @@
 // Creating, validating and (de)serialising shows.
 
 import { DEFAULT_EFFECT } from './effects';
+import { defaultAudioReact } from './react';
 import { templateById } from './stages';
 import type { Cue, Effect, Fixture, FixtureLook, OutputSettings, Pad, Show } from './types';
 import { uid } from './util';
@@ -10,7 +11,7 @@ export const FILE_EXTENSION = 'lshow';
 
 export const DEFAULT_OUTPUT: OutputSettings = {
   artnet: { enabled: false, host: '255.255.255.255', rate: 40 },
-  osc: { enabled: false, port: 9000 },
+  osc: { enabled: false, port: 9001 }, // 9000 is Amethyst VJ's OSC port
   midi: { enabled: false, port: null, timecode: false, map: {} },
   etherdream: { enabled: false, pps: 30000 },
 };
@@ -83,6 +84,7 @@ export function newShow(templateId = 'arena'): Show {
     bpm: 128,
     shapes: [],
     output: structuredClone(DEFAULT_OUTPUT),
+    audio: defaultAudioReact(),
   };
 }
 
@@ -113,6 +115,7 @@ export function parseShow(text: string): Show {
     timeline: { cues: raw.timeline?.cues ?? [], hits: raw.timeline?.hits ?? [], lanes: raw.timeline?.lanes ?? [] },
     music: raw.music ?? null,
     bpm: raw.bpm ?? 128,
+    audio: { ...defaultAudioReact(), ...raw.audio },
     shapes: raw.shapes ?? [],
     output: {
       artnet: { ...DEFAULT_OUTPUT.artnet, ...raw.output?.artnet },
