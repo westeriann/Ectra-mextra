@@ -83,6 +83,16 @@ npm run app:dev        # desktop app with hot reload
 ```bash
 npm run app:build      # → src-tauri/target/release/bundle/
 ```
+#### Building the Windows installer from Linux
+No Windows machine needed. This uses the MinGW toolchain, so nothing is downloaded from Microsoft:
+```bash
+sudo apt install nsis gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+rustup target add x86_64-pc-windows-gnu
+npx tauri build --target x86_64-pc-windows-gnu --bundles nsis
+# → src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/Laser Studio_<version>_x64-setup.exe
+```
+The installer is unsigned, so Windows SmartScreen will warn on first run (More info → Run anyway). Signing needs a code-signing certificate; see `bundle > windows > signCommand` in the Tauri docs.
+
 GitHub Actions (`.github/workflows/laser-studio.yml`) builds and tests on Windows, macOS and Linux on every push, and uploads the installers as workflow artifacts. Pushing a tag like `laser-studio-v0.2.0` also creates a draft GitHub Release with them.
 This produces an `.msi`/`.exe` on Windows, a `.dmg`/`.app` on macOS, and `.deb`/`.AppImage`/`.rpm` on Linux. Build on each OS you want to ship for.
 
