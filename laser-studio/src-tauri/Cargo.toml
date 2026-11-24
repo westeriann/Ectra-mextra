@@ -1,6 +1,6 @@
 [package]
 name = "laser-studio"
-version = "0.1.0"
+version = "0.2.0"
 description = "Design, program and play virtual laser shows"
 edition = "2021"
 rust-version = "1.77"
