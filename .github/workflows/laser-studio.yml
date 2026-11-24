@@ -1,0 +1,100 @@
+# Builds and tests Laser Studio on Windows, macOS and Linux.
+# - Every push/PR touching laser-studio/: tests + installers uploaded as workflow artifacts.
+# - Pushing a tag like `laser-studio-v0.2.0`: also creates a draft GitHub Release with the installers.
+name: Laser Studio
+
+on:
+  push:
+    paths: ['laser-studio/**', '.github/workflows/laser-studio.yml']
+    tags: ['laser-studio-v*']
+  pull_request:
+    paths: ['laser-studio/**', '.github/workflows/laser-studio.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: laser-studio-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: laser-studio
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: laser-studio/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: laser-studio/src-tauri -> target
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libasound2-dev
+      - run: npm ci
+      - name: Typecheck, build and unit tests (frontend)
+        run: npm run build && npm test
+      - name: Unit tests (Rust)
+        working-directory: laser-studio/src-tauri
+        run: cargo test
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+          - platform: ubuntu-22.04
+            args: ''
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: laser-studio/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: laser-studio/src-tauri -> target
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libasound2-dev patchelf
+      - run: npm ci
+      - name: Build installers
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: laser-studio
+          args: ${{ matrix.args }}
+          # Only tag builds publish a (draft) release; branch builds just upload artifacts below.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/laser-studio-v') && github.ref_name || '' }}
+          releaseName: 'Laser Studio ${{ github.ref_name }}'
+          releaseBody: 'Download the installer for your system below.'
+          releaseDraft: true
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: laser-studio-${{ matrix.platform }}
+          path: |
+            laser-studio/src-tauri/target/release/bundle/**/*
+            laser-studio/src-tauri/target/*/release/bundle/**/*
+          if-no-files-found: error
