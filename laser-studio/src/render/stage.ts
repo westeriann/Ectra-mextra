@@ -52,6 +52,7 @@ export class StageBuilder {
   readonly fixtureGroup = new THREE.Group();
   private screens: THREE.ShaderMaterial[] = [];
   private crowds: { mesh: THREE.InstancedMesh; base: THREE.Matrix4[]; phase: number[] }[] = [];
+  private balls: { mesh: THREE.Mesh; spin: number }[] = [];
   private spill: THREE.PointLight[] = [];
   readonly meshes = new Map<string, THREE.Object3D>();
   private ambient = new THREE.HemisphereLight(0x8090ff, 0x101010, 0.2);
@@ -80,6 +81,7 @@ export class StageBuilder {
     this.meshes.clear();
     this.screens = [];
     this.crowds = [];
+    this.balls = [];
     this.spill = [];
     this.ambientLevel = 0.15 + stage.ambient * 2.5;
     this.ambient.intensity = this.ambientLevel;
@@ -193,6 +195,38 @@ export class StageBuilder {
         this.screens.push(mat);
         break;
       }
+      case 'mirror': {
+        // Pivot at the mirror's centre so tilt matches the beam tracer.
+        const pivot = new THREE.Group();
+        pivot.position.y = h / 2;
+        pivot.rotation.order = 'YXZ';
+        pivot.rotation.x = -rad(el.tilt ?? 0);
+        const glass = new THREE.Mesh(
+          new THREE.PlaneGeometry(w, h),
+          new THREE.MeshStandardMaterial({ color, metalness: 0.85, roughness: 0.12, side: THREE.DoubleSide, emissive: 0x161a24 }),
+        );
+        const frame = new THREE.LineSegments(
+          new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, 0.04)),
+          new THREE.LineBasicMaterial({ color: 0x8a90a0 }),
+        );
+        pivot.add(glass, frame);
+        root.add(pivot);
+        break;
+      }
+      case 'mirrorball': {
+        const r = w / 2;
+        const ball = new THREE.Mesh(
+          new THREE.IcosahedronGeometry(r, 3),
+          new THREE.MeshStandardMaterial({ color, metalness: 0.9, roughness: 0.15, flatShading: true, emissive: 0x20242e }),
+        );
+        ball.position.y = r;
+        // Hanging cable.
+        const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 3, 4), new THREE.MeshBasicMaterial({ color: 0x333333 }));
+        cable.position.y = r * 2 + 1.5;
+        root.add(ball, cable);
+        this.balls.push({ mesh: ball, spin: el.spin ?? 0.08 });
+        break;
+      }
       case 'crowd': {
         const density = el.density ?? 0.6;
         const count = Math.min(4000, Math.round(w * d * density * 1.1));
@@ -241,8 +275,10 @@ export class StageBuilder {
       const sel = ids.has(id);
       obj.traverse((o) => {
         if (o instanceof THREE.Mesh && o.material instanceof THREE.MeshStandardMaterial) {
-          o.material.emissive.set(sel ? 0x2a6cff : 0x000000);
-          o.material.emissiveIntensity = sel ? 0.6 : 0;
+          const base = (o.userData.baseEmissive ??= o.material.emissive.clone()) as THREE.Color;
+          if (sel) o.material.emissive.set(0x2a6cff);
+          else o.material.emissive.copy(base);
+          o.material.emissiveIntensity = sel ? 0.6 : 1;
         }
       });
     }
@@ -258,6 +294,7 @@ export class StageBuilder {
       mat.uniforms.uFlash.value = flash;
       mat.uniforms.uLevel.value = level;
     }
+    for (const b of this.balls) b.mesh.rotation.y = time * b.spin * Math.PI * 2;
     const m = new THREE.Matrix4();
     const bounce = Math.pow(1 - (((beat % 1) + 1) % 1), 2);
     for (const c of this.crowds) {

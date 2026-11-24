@@ -13,6 +13,8 @@ export const ELEMENT_DEFAULTS: Record<StageElementKind, Omit<StageElement, 'id' 
   crowd: { kind: 'crowd', name: 'Crowd', size: [24, 1.7, 16], rotation: 0, color: '#1b1d26', density: 0.6 },
   wall: { kind: 'wall', name: 'Wall', size: [30, 10, 0.5], rotation: 0, color: '#101118' },
   pillar: { kind: 'pillar', name: 'Pillar', size: [0.8, 8, 0.8], rotation: 0, color: '#2a2c36' },
+  mirror: { kind: 'mirror', name: 'Mirror', size: [2, 2, 0.05], rotation: 0, color: '#c8d0e0', tilt: 0 },
+  mirrorball: { kind: 'mirrorball', name: 'Mirror Ball', size: [0.8, 0.8, 0.8], rotation: 0, color: '#d0d6e4', spin: 0.08 },
 };
 
 export function makeElement(kind: StageElementKind, position: Vec3, over: Partial<StageElement> = {}): StageElement {
@@ -75,6 +77,7 @@ export const STAGE_TEMPLATES: StageTemplate[] = [
           makeElement('speaker', [-6, 0, -6], {}),
           makeElement('speaker', [6, 0, -6], {}),
           makeElement('crowd', [0, 0, 3], { size: [16, 1.7, 12], density: 0.7 }),
+          makeElement('mirrorball', [0, 4.4, -1], { size: [0.8, 0.8, 0.8] }),
         ],
       },
       fixtures: patch(row(4, 9, 4.7, -6, 'Bar', [0, 2])),
@@ -164,6 +167,9 @@ export const STAGE_TEMPLATES: StageTemplate[] = [
             makeElement('pillar', [6, 0, z], { size: [0.7, 9, 0.7] }),
           ]),
           makeElement('platform', [0, 0, -21], { size: [8, 1, 4], name: 'DJ Riser' }),
+          // Mirrors at the back of the room bounce the end lasers back over the crowd.
+          makeElement('mirror', [-5, 1.5, 24], { size: [6, 3, 0.05], rotation: 180, tilt: 8, name: 'Back Mirror L' }),
+          makeElement('mirror', [5, 1.5, 24], { size: [6, 3, 0.05], rotation: 180, tilt: 8, name: 'Back Mirror R' }),
           makeElement('crowd', [0, 0, 0], { size: [18, 1.7, 30], density: 0.55 }),
         ],
       },

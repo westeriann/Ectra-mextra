@@ -5,7 +5,7 @@
 import { ELEMENT_DEFAULTS, makeElement, makeFixture, STAGE_TEMPLATES } from '../core/stages';
 import type { Fixture, Show, StageElement, StageElementKind, Vec3 } from '../core/types';
 import { clamp, rad, uid } from '../core/util';
-import { button, clear, colorInput, h, modal, numberInput, section, select, slider, textInput, vec3Input } from './dom';
+import { button, clear, colorInput, h, modal, numberInput, section, select, slider, textInput, toggle, vec3Input } from './dom';
 import type { Studio } from './studio';
 
 const KIND_ICONS: Record<StageElementKind, string> = {
@@ -17,6 +17,8 @@ const KIND_ICONS: Record<StageElementKind, string> = {
   crowd: '⁘',
   wall: '█',
   pillar: '▮',
+  mirror: '◩',
+  mirrorball: '◍',
 };
 
 const PLAN_COLORS: Record<StageElementKind, string> = {
@@ -28,6 +30,8 @@ const PLAN_COLORS: Record<StageElementKind, string> = {
   crowd: '#2f6b4f',
   wall: '#454a5c',
   pillar: '#6b7080',
+  mirror: '#c8d0e0',
+  mirrorball: '#e2e8f0',
 };
 
 type Item = { kind: 'element'; el: StageElement } | { kind: 'fixture'; f: Fixture };
@@ -43,7 +47,8 @@ function findItem(show: Show, id: string | null): Item | null {
 export function mountStageList(root: HTMLElement, studio: Studio) {
   const { store } = studio;
   const add = (kind: StageElementKind) => {
-    const el = makeElement(kind, kind === 'truss' ? [0, 8, -6] : [0, 0, kind === 'crowd' ? 10 : -6]);
+    const spawn: Partial<Record<StageElementKind, Vec3>> = { truss: [0, 8, -6], crowd: [0, 0, 10], mirror: [0, 3, 4], mirrorball: [0, 5, 2] };
+    const el = makeElement(kind, spawn[kind] ?? [0, 0, -6]);
     store.edit((s) => s.stage.elements.push(el));
     store.setSel({ element: el.id });
   };
@@ -128,6 +133,12 @@ export function mountStageInspector(root: HTMLElement, studio: Studio) {
         slider({ label: 'Haze', value: st.haze, min: 0, max: 1, step: 0.01, format: (v) => `${Math.round(v * 100)}%`, onInput: (v) => edit((s) => (s.stage.haze = v), 'haze') }),
         slider({ label: 'House lights', value: st.ambient, min: 0, max: 1, step: 0.01, format: (v) => `${Math.round(v * 100)}%`, onInput: (v) => edit((s) => (s.stage.ambient = v), 'ambient') }),
         colorInput({ label: 'Sky', value: st.sky, onInput: (v) => edit((s) => (s.stage.sky = v), 'sky') }),
+        toggle({
+          label: 'Beams stop at solid objects',
+          value: st.occlusion !== false,
+          title: 'Screens, walls, risers, speakers and pillars block beams (and show where they land)',
+          onChange: (v) => edit((s) => (s.stage.occlusion = v), 'occlusion'),
+        }),
       ),
       section(
         'Start from a template',
@@ -181,6 +192,14 @@ export function mountStageInspector(root: HTMLElement, studio: Studio) {
         el.kind === 'screen'
           ? select({ label: 'Screen content', value: el.screenMode ?? 'pulse', options: ['pulse', 'bars', 'gradient', 'off'] as const, onChange: (v) => upd((e) => (e.screenMode = v), 'screen') })
           : null,
+        el.kind === 'mirror'
+          ? slider({ label: 'Tilt', value: el.tilt ?? 0, min: -80, max: 80, unit: '°', title: 'Angle the mirror up or down', onInput: (v) => upd((e) => (e.tilt = v), 'tilt') })
+          : null,
+        el.kind === 'mirrorball'
+          ? slider({ label: 'Spin', value: el.spin ?? 0.08, min: 0, max: 1, step: 0.01, unit: ' rev/s', onInput: (v) => upd((e) => (e.spin = v), 'spin') })
+          : null,
+        el.kind === 'mirrorball' ? h('p', { class: 'hint' }, 'Size sets the ball’s diameter. Aim lasers at it to split each beam into a spray of reflections.') : null,
+        el.kind === 'mirror' ? h('p', { class: 'hint' }, 'Both faces reflect. Rotate and tilt it to bounce beams around the room.') : null,
         el.kind === 'crowd'
           ? slider({ label: 'Density', value: el.density ?? 0.6, min: 0.05, max: 1.5, step: 0.05, onInput: (v) => upd((e) => (e.density = v), 'density') })
           : null,

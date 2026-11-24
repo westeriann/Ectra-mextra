@@ -13,12 +13,14 @@ Built with [Tauri 2](https://tauri.app) (Rust backend) and TypeScript + [three.j
 - Per-effect beams, spread, size, pan/tilt, speed (free-running Hz or locked to the beat), phase spread across lasers, left/right mirroring, colour modes (solid, alternate, gradient, rainbow, ILDA source colours), strobe and audio-reactive intensity.
 - A programmer: select lasers (in the list or by clicking them in 3D), change the look live, then **Record new cue** or **Update** an existing one.
 - A cue list with crossfade times, GO / Back / Release, drag-to-reorder, duplicate and colour tags.
+- **Morphing crossfades**: by default beams glide from one look into the next and colours blend. Each cue can switch to a classic dissolve instead.
 - 8 **flash pads** for busking: hold (flash) or latch (toggle), each bound to a key and optionally a MIDI note.
 - Master fader, blackout and tap tempo.
 
 **Show** (music sync)
 - Load MP3/WAV/OGG/FLAC/M4A. The waveform is drawn and the **tempo and downbeat are detected automatically**.
 - A timeline with a beat/bar grid, a cue lane and a hits lane (flash / strobe / blackout). Drag to move, snap to the beat, double-click to add, Delete to remove. Ctrl+wheel zooms.
+- **Automation lanes**: curves for intensity, speed, size, spread, pan, tilt and colour shift, per laser group, with linear, smooth or step segments. Click a lane to add points, drag to move them, double-click to delete. There's also a one-click "8-bar build-up" preset that ramps into the drop.
 - **Auto-program** lays your cues along the song: calm cues on quiet sections, intense cues on loud ones, flashes on drops.
 - **Record live**: arm recording, play the song and fire cues. Your presses are written to the timeline.
 - Beat-synced effects lock to the song's grid. The tempo can be fixed by hand (×2, ÷2, "downbeat here").
@@ -27,6 +29,8 @@ Built with [Tauri 2](https://tauri.app) (Rust backend) and TypeScript + [three.j
 **Stage** (venue designer)
 - Templates: Club, Arena, Festival Main Stage, Warehouse, Empty Floor.
 - Add and edit floors, risers, truss, LED screens (animated, beat-reactive), speaker stacks, crowds (people bounce on the beat), walls and pillars.
+- **Beams stop at solid objects** (screens, walls, risers, speakers, pillars) and leave glowing hit spots where they land. This can be turned off per venue.
+- **Mirrors** (rotate and tilt them to bounce beams around the room) and **mirror balls** (each beam that hits one splits into a spinning spray of reflections).
 - Move things with the 3D gizmo or by dragging on the top-down floor plan. Size, rotation and colour are set in the inspector.
 - Place lasers one at a time or as a row. Each has an aim, scan angle, beam limit, power, DMX patch and an optional DAC.
 - Haze, house lights and sky colour.
@@ -48,6 +52,7 @@ Built with [Tauri 2](https://tauri.app) (Rust backend) and TypeScript + [three.j
 - **Ether Dream DACs** (experimental): discover DACs on the network and stream each laser's beams as a real scan path.
 
 **Everywhere**
+- A guided tour on first launch (File → Tutorial to see it again).
 - A fullscreen **output window** for a projector or second screen (double-click for fullscreen, F1–F5 for cameras).
 - Camera presets: front of house, in the crowd, side, top down, drone orbit.
 - **Record video** of the 3D view, with the music, to WebM.
@@ -78,6 +83,7 @@ npm run app:dev        # desktop app with hot reload
 ```bash
 npm run app:build      # → src-tauri/target/release/bundle/
 ```
+GitHub Actions (`.github/workflows/laser-studio.yml`) builds and tests on Windows, macOS and Linux on every push, and uploads the installers as workflow artifacts. Pushing a tag like `laser-studio-v0.2.0` also creates a draft GitHub Release with them.
 This produces an `.msi`/`.exe` on Windows, a `.dmg`/`.app` on macOS, and `.deb`/`.AppImage`/`.rpm` on Linux. Build on each OS you want to ship for.
 
 ### Tests
@@ -89,7 +95,8 @@ cd src-tauri && cargo test        # Art-Net, OSC, MIDI/MTC and Ether Dream proto
 ## Project layout
 ```
 src/core/       Pure show logic (no DOM): data model, effects, playback engine,
-                music analysis, ILDA, DMX mapping, laser scan paths. Unit tested.
+                automation & morphing, beam tracing (occlusion/mirrors), music
+                analysis, ILDA, DMX mapping, laser scan paths. Unit tested.
 src/render/     three.js: instanced beams, stage geometry, viewport/camera/gizmo.
 src/ui/         Panels for each tab, the store (undo/autosave) and the controller.
 src/platform/   Bridge to the Rust backend, with browser fallbacks.

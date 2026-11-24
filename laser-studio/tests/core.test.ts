@@ -373,3 +373,74 @@ describe('laser path', () => {
     expect(beamsToPoints([], 60)).toEqual([0, 0, 0, 0, 0]);
   });
 });
+
+describe('beam tracing', () => {
+  const stageWith = async (els: Parameters<typeof import('../src/core/stages').makeElement>[]) => {
+    const { makeElement } = await import('../src/core/stages');
+    return { name: 't', haze: 0.5, ambient: 0, sky: '#000', elements: [makeElement('floor', [0, 0, 0]), ...els.map((a) => makeElement(...a))] };
+  };
+  const opts = (segments = 1000) => ({ maxLength: 100, maxDepth: 3, ballSplits: 6, time: 0, budget: { segments } });
+
+  it('stops beams at solid objects, and not when occlusion is off', async () => {
+    const { buildTraceScene, traceBeam } = await import('../src/core/trace');
+    const stage = await stageWith([['wall', [0, 0, 10], { size: [10, 10, 1] }]]);
+    const segs = traceBeam(buildTraceScene(stage), [0, 5, 0], [0, 0, 1], opts());
+    expect(segs).toHaveLength(1);
+    expect(segs[0].length).toBeCloseTo(9.5, 6);
+    expect(segs[0].hit?.normal).toEqual([0, 0, -1]);
+    const open = traceBeam(buildTraceScene({ ...stage, occlusion: false }), [0, 5, 0], [0, 0, 1], opts());
+    expect(open[0].length).toBe(100);
+  });
+
+  it('handles rotated boxes and ignores boxes the laser sits inside', async () => {
+    const { buildTraceScene, traceBeam } = await import('../src/core/trace');
+    // A thin wall rotated 90° so it runs along z — a beam along +x hits its face at x = 5 - 0.5.
+    const stage = await stageWith([['wall', [5, 0, 0], { size: [10, 10, 1], rotation: 90 }], ['platform', [0, 0, 0], { size: [4, 8, 4] }]]);
+    const segs = traceBeam(buildTraceScene(stage), [0, 5, 0], [1, 0, 0], opts());
+    expect(segs[0].length).toBeCloseTo(4.5, 6);
+    expect(segs[0].hit!.normal[0]).toBeCloseTo(-1, 6);
+  });
+
+  it('lands on the floor', async () => {
+    const { buildTraceScene, traceBeam } = await import('../src/core/trace');
+    const segs = traceBeam(buildTraceScene(await stageWith([])), [0, 10.1, 0], [0, -Math.SQRT1_2, Math.SQRT1_2], opts());
+    expect(segs[0].length).toBeCloseTo(10 * Math.SQRT2, 6);
+    expect(segs[0].hit?.kind).toBe('floor');
+  });
+
+  it('reflects off mirrors (both faces) and respects their size', async () => {
+    const { buildTraceScene, traceBeam } = await import('../src/core/trace');
+    // Mirror facing -z... rotated 45° so a beam along +z turns to +x or -x.
+    const stage = await stageWith([['mirror', [0, 4, 10], { size: [4, 2, 0.05], rotation: 45 }]]);
+    const scene = buildTraceScene(stage);
+    const segs = traceBeam(scene, [0, 5, 0], [0, 0, 1], opts());
+    expect(segs).toHaveLength(2);
+    expect(segs[0].length).toBeCloseTo(10, 6);
+    expect(Math.abs(segs[1].dir[0])).toBeCloseTo(1, 6);
+    expect(segs[1].dir[2]).toBeCloseTo(0, 6);
+    expect(segs[1].gain).toBeLessThan(1);
+    // Above the mirror: passes straight by.
+    expect(traceBeam(scene, [0, 7, 0], [0, 0, 1], opts())).toHaveLength(1);
+  });
+
+  it('tilted mirrors send beams up', async () => {
+    const { buildTraceScene, traceBeam } = await import('../src/core/trace');
+    const stage = await stageWith([['mirror', [0, 4, 10], { size: [4, 4, 0.05], rotation: 180, tilt: 30 }]]);
+    const segs = traceBeam(buildTraceScene(stage), [0, 6, 0], [0, 0, 1], opts());
+    expect(segs[1].dir[1]).toBeGreaterThan(0.5);
+    expect(segs[1].dir[2]).toBeLessThan(0);
+  });
+
+  it('mirror balls split beams and stay within the budget', async () => {
+    const { buildTraceScene, traceBeam } = await import('../src/core/trace');
+    const stage = await stageWith([['mirrorball', [0, 4.5, 10], { size: [1, 1, 1] }]]);
+    const scene = buildTraceScene(stage);
+    const segs = traceBeam(scene, [0, 5, 0], [0, 0, 1], { ...opts(), maxDepth: 1 });
+    expect(segs).toHaveLength(1 + 6);
+    expect(segs[0].length).toBeCloseTo(9.5, 6);
+    // Reflections leave the ball (point outwards from its surface).
+    for (const s of segs.slice(1)) expect(s.dir[2]).toBeLessThan(0.99);
+    const limited = traceBeam(scene, [0, 5, 0], [0, 0, 1], { ...opts(3), maxDepth: 1 });
+    expect(limited).toHaveLength(3);
+  });
+});

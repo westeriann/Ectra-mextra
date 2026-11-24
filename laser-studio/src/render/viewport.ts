@@ -6,6 +6,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { Frame } from '../core/engine';
+import { buildTraceScene } from '../core/trace';
 import type { Show, Vec3 } from '../core/types';
 import { BeamLayer } from './beams';
 import { StageBuilder, type Pickable } from './stage';
@@ -130,7 +131,7 @@ export class Viewport {
       this.stageKey = key;
       const keep = this.gizmoTarget;
       this.stage.build(show.stage, show.fixtures);
-      this.beams.floorY = this.stage.floorY;
+      this.beams.scene = buildTraceScene(show.stage);
       this.scene.background = new THREE.Color(show.stage.sky);
       this.scene.fog = new THREE.FogExp2(show.stage.sky, 0.002 + show.stage.haze * 0.006);
       this.computeBounds(show);
@@ -193,7 +194,7 @@ export class Viewport {
   }
 
   render(show: Show, frame: Frame, time: number, dt: number) {
-    this.beams.update(show.fixtures, frame.fixtures);
+    this.beams.update(show.fixtures, frame.fixtures, time);
     const colors = new Map<string, THREE.Color>();
     for (const fr of frame.fixtures) {
       if (!fr.beams.length) continue;

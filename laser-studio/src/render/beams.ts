@@ -3,6 +3,7 @@
 // are drawn as soft dots where beams land.
 
 import * as THREE from 'three';
+import { DEFAULT_TRACE, traceBeam, type TraceScene, type V3 } from '../core/trace';
 import type { Fixture, FixtureFrame } from '../core/types';
 import { rad } from '../core/util';
 
@@ -10,11 +11,12 @@ const MAX_BEAMS = 12000;
 const MAX_LENGTH = 140;
 
 const beamVertex = /* glsl */ `
-  varying float vAlong;
+  attribute vec2 aFade; // x: distance travelled before this segment, y: segment length
+  varying float vDist;
   varying float vEdge;
   varying vec3 vColor;
   void main() {
-    vAlong = position.y;
+    vDist = (aFade.x + position.y * aFade.y) / ${MAX_LENGTH.toFixed(1)};
     #ifdef USE_INSTANCING_COLOR
       vColor = instanceColor;
     #else
@@ -31,12 +33,12 @@ const beamVertex = /* glsl */ `
 
 const beamFragment = /* glsl */ `
   uniform float uHaze;
-  varying float vAlong;
+  varying float vDist;
   varying float vEdge;
   varying vec3 vColor;
   void main() {
     float core = pow(vEdge, 2.2);
-    float fade = pow(1.0 - vAlong, 1.35);
+    float fade = pow(1.0 - clamp(vDist, 0.0, 1.0), 1.35);
     float a = core * fade * uHaze;
     gl_FragColor = vec4(vColor * a, 1.0);
   }
@@ -78,8 +80,10 @@ export class BeamLayer {
   private pos = new THREE.Vector3();
   private scl = new THREE.Vector3();
   private col = new THREE.Color();
-  /** Height of the floor beams land on. */
-  floorY = 0;
+  private fade: THREE.InstancedBufferAttribute;
+  private normal = new THREE.Vector3();
+  /** Stage geometry beams can hit, bounce off or split on. */
+  scene: TraceScene = { floorY: 0, boxes: [], mirrors: [], balls: [] };
 
   constructor() {
     // Unit cylinder from y=0 to y=1; narrow at the aperture, wider at the far end.
@@ -96,6 +100,8 @@ export class BeamLayer {
     });
     this.beams = new THREE.InstancedMesh(geo, this.beamMat, MAX_BEAMS);
     this.beams.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_BEAMS * 3), 3);
+    this.fade = new THREE.InstancedBufferAttribute(new Float32Array(MAX_BEAMS * 2), 2);
+    geo.setAttribute('aFade', this.fade);
     this.beams.frustumCulled = false;
     this.beams.count = 0;
 
@@ -128,35 +134,49 @@ export class BeamLayer {
     return out.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
   }
 
-  update(fixtures: Fixture[], frames: FixtureFrame[]) {
+  update(fixtures: Fixture[], frames: FixtureFrame[], time: number) {
     let n = 0;
     let s = 0;
     const byId = new Map(fixtures.map((f) => [f.id, f]));
+    const opts = { ...DEFAULT_TRACE, time, budget: { segments: MAX_BEAMS } };
     for (const fr of frames) {
       const f = byId.get(fr.fixtureId);
       if (!f) continue;
+      const origin: V3 = [f.position[0], f.position[1], f.position[2]];
       for (const b of fr.beams) {
         if (n >= MAX_BEAMS) break;
         BeamLayer.direction(f, b.x, b.y, this.dir);
-        let len = MAX_LENGTH;
-        const hitsFloor = this.dir.y < -0.01 && f.position[1] > this.floorY;
-        if (hitsFloor) len = Math.min(len, (f.position[1] - this.floorY) / -this.dir.y);
-        this.q.setFromUnitVectors(this.up, this.dir);
-        const width = 0.012 + len * 0.0012;
-        this.pos.set(f.position[0], f.position[1], f.position[2]);
-        this.scl.set(width, len, width);
-        this.m.compose(this.pos, this.q, this.scl);
-        this.beams.setMatrixAt(n, this.m);
-        this.col.setRGB(b.r * b.a, b.g * b.a, b.b * b.a);
-        this.beams.setColorAt(n, this.col);
-        n++;
-        if (hitsFloor && s < MAX_BEAMS) {
-          const size = 0.25 + len * 0.012;
-          this.pos.set(f.position[0] + this.dir.x * len, this.floorY + 0.02, f.position[2] + this.dir.z * len);
-          this.m.compose(this.pos, this.q.identity(), this.scl.set(size, 1, size));
-          this.spots.setMatrixAt(s, this.m);
-          this.spots.setColorAt(s, this.col);
-          s++;
+        const segs = traceBeam(this.scene, origin, [this.dir.x, this.dir.y, this.dir.z], opts);
+        for (const seg of segs) {
+          if (n >= MAX_BEAMS) break;
+          this.dir.set(seg.dir[0], seg.dir[1], seg.dir[2]);
+          this.q.setFromUnitVectors(this.up, this.dir);
+          // Beams widen with distance from the projector.
+          const width = 0.012 + (seg.start + seg.length * 0.5) * 0.0012;
+          this.pos.set(seg.origin[0], seg.origin[1], seg.origin[2]);
+          this.scl.set(width, seg.length, width);
+          this.m.compose(this.pos, this.q, this.scl);
+          this.beams.setMatrixAt(n, this.m);
+          const g = b.a * seg.gain;
+          this.col.setRGB(b.r * g, b.g * g, b.b * g);
+          this.beams.setColorAt(n, this.col);
+          this.fade.setXY(n, seg.start, seg.length);
+          n++;
+          // Bright dot where the beam lands on a surface (not on mirrors — they pass the light on).
+          const hit = seg.hit;
+          if (hit && hit.kind !== 'mirror' && s < MAX_BEAMS) {
+            const dist = seg.start + seg.length;
+            const size = 0.25 + dist * 0.012;
+            this.normal.set(hit.normal[0], hit.normal[1], hit.normal[2]);
+            this.pos.set(hit.point[0], hit.point[1], hit.point[2]).addScaledVector(this.normal, 0.02);
+            this.q.setFromUnitVectors(this.up, this.normal);
+            this.m.compose(this.pos, this.q, this.scl.set(size, 1, size));
+            this.spots.setMatrixAt(s, this.m);
+            const fadeAt = Math.pow(Math.max(0, 1 - dist / MAX_LENGTH), 1.35);
+            this.col.multiplyScalar(fadeAt * 1.6);
+            this.spots.setColorAt(s, this.col);
+            s++;
+          }
         }
       }
     }
@@ -164,6 +184,7 @@ export class BeamLayer {
     this.spots.count = s;
     this.beams.instanceMatrix.needsUpdate = true;
     this.beams.instanceColor!.needsUpdate = true;
+    this.fade.needsUpdate = true;
     this.spots.instanceMatrix.needsUpdate = true;
     this.spots.instanceColor!.needsUpdate = true;
   }

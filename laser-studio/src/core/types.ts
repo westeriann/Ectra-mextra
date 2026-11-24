@@ -115,7 +115,9 @@ export type StageElementKind =
   | 'speaker'
   | 'crowd'
   | 'wall'
-  | 'pillar';
+  | 'pillar'
+  | 'mirror'
+  | 'mirrorball';
 
 export interface StageElement {
   id: string;
@@ -131,6 +133,10 @@ export interface StageElement {
   /** Screens: what they show. Crowd: density 0..1 (stored in `density`). */
   screenMode?: 'pulse' | 'bars' | 'gradient' | 'off';
   density?: number;
+  /** Mirrors: tilt up/down in degrees. */
+  tilt?: number;
+  /** Mirror balls: revolutions per second. */
+  spin?: number;
 }
 
 export interface Stage {
@@ -140,6 +146,8 @@ export interface Stage {
   haze: number;
   /** 0..1 house light level. */
   ambient: number;
+  /** Beams stop at solid objects (screens, walls, risers…). Default on. */
+  occlusion?: boolean;
   sky: string;
 }
 
